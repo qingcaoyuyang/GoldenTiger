@@ -1,0 +1,17 @@
+# 依赖
+node_modules/
+
+# 运行时数据（含用户密码哈希，绝不入库）
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# 系统垃圾
+.DS_Store
+*.log
+npm-debug.log*
+
+# 编辑器
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,12 @@
+{
+  "name": "golden-tiger",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GoldenTiger - 金虎水果机（H5 老虎机 + 账号系统 + 排行榜）",
+  "scripts": {
+    "start": "node --experimental-sqlite server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
