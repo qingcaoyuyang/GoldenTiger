@@ -82,3 +82,48 @@ GoldenTiger/
 - 开奖在客户端计算、结果上报服务端存档。排行榜可防"改本地存储"，但防不了改接口请求。
   如需防刷榜，需把开奖逻辑搬到服务端（方案已设计，见项目内《老虎机-H5实现方案.md》）。
 - 积分不可购买、不可兑换现实价值，纯娱乐。
+
+## 线上部署（Azure VM + Cloudflare Tunnel）
+
+当前生产环境：
+
+| 项 | 值 |
+|---|---|
+| 域名 | **https://tiger.gesichen.top** |
+| 服务器 | Azure VM `workbro-vm`（Ubuntu 24.04，eastasia），代码位于 `~/goldentiger` |
+| 进程 | `goldentiger.service`（Node 22 via nvm，监听 3100）+ `cloudflared-goldentiger.service` |
+| 隧道 | Cloudflare Tunnel `goldentiger`，出站连接，**服务器不开任何入站端口**（除 SSH 22） |
+
+复现步骤：
+
+```bash
+# 1. 服务器部署代码（本地执行）
+rsync -az --exclude '.git' --exclude 'data' --exclude 'node_modules' \
+  -e "ssh -i <你的密钥>" ./ azureuser@<VM_IP>:~/goldentiger/
+
+# 2. 服务器装 Node 22（nvm 用户级，不动系统 Node）
+ssh azureuser@<VM_IP>
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh" && nvm install 22
+
+# 3. systemd 常驻（ExecStart 换成实际 nvm node 路径）
+sudo systemctl enable --now goldentiger
+
+# 4. Cloudflare Tunnel（一次性授权）
+cloudflared tunnel login                  # 浏览器授权目标域名
+cloudflared tunnel create goldentiger
+cloudflared tunnel route dns goldentiger tiger.gesichen.top
+
+# 5. ~/.cloudflared/config.yml
+cat > ~/.cloudflared/config.yml <<'EOF'
+tunnel: <TUNNEL_UUID>
+credentials-file: /home/<user>/.cloudflared/<TUNNEL_UUID>.json
+ingress:
+  - hostname: tiger.gesichen.top
+    service: http://localhost:3100
+  - service: http_status:404
+EOF
+
+# 6. cloudflared 常驻
+sudo systemctl enable --now cloudflared-goldentiger
+```
