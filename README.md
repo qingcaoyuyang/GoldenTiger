@@ -13,9 +13,12 @@ node --experimental-sqlite server.js
 npm start
 ```
 
-打开 http://localhost:3000 即可玩。
+打开 http://localhost:3100 即可玩。
 
 换端口：`PORT=8080 node --experimental-sqlite server.js`
+
+> 生产部署在 Azure VM（~/goldentiger）+ systemd 常驻 + Cloudflare Tunnel 出站连接，
+> 不依赖服务器开放入站端口。
 
 ## 功能
 
