@@ -3501,7 +3501,10 @@ function renderLamps(){
   const kids = el.centerLamps.children;
   for (let i = 0; i < kids.length; i++) kids[i].classList.toggle('on', i < lit);
   el.centerLamps.classList.toggle('is-full', lit >= LAMP_GOAL);
-  const canPull = state.leverReady && !state.leverBusy && !state.busy;
+  // 注意：不能把 state.busy 算进这里——灯经常在结算动画（busy）期间点满，
+  // 若此时摘掉 ready 类，busy 解除后没有任何调用会补上，拉杆就永久消失了。
+  // busy 期间的真实拦截由 pullLever 开头的 busy 检查负责。
+  const canPull = state.leverReady && !state.leverBusy;
   el.centerLever.classList.toggle('ready', canPull);
   el.centerLever.disabled = !canPull;
   setText(el.poolNote, lit >= LAMP_GOAL ? '七灯已满 · 拉动拉杆' : '每次启动 · 半数投入进入彩池');
@@ -4390,6 +4393,7 @@ async function runNormal(index, roundId){
   await wait(jackpotHit ? 1900 : 880);
   if (roundId !== resolveLock) return;
   state.busy = false;
+  renderLamps();
   updateControls();
 }
 
@@ -4445,6 +4449,7 @@ async function runGridBonus(triggerIndex, roundId){
     boom(total, total >= 240 ? 'super' : 'win');
     if (total >= 120) showWinOverlay('big', 'GOLD SWEEP', total, `左侧幸运格 · ${strip} 灯连扫`, 1800);
     state.busy = false;
+    renderLamps();
     updateControls();
   } else {
     sound.betLose();
@@ -4496,6 +4501,7 @@ async function runCardBonus(triggerIndex, roundId){
     boom(total, total >= 240 ? 'super' : 'win');
     if (total >= 120) showWinOverlay('big', 'CARD BONUS', total, '右侧幸运格 · 五灯连环', 1800);
     state.busy = false;
+    renderLamps();
     updateControls();
   } else {
     sound.betLose();
@@ -4557,6 +4563,7 @@ async function gamble(choice){
     state.busy = false;
     state.phase = 'idle';
     state.doubleUsed = false;          // 赢下猜大小后可以再加倍一次
+    renderLamps();
     updateControls();
   } else {
     state.bonusWin = 0;
