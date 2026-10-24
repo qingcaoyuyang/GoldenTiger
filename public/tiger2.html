@@ -753,6 +753,111 @@ body.win-active .center-stage{opacity:0}
   50%{outline:3px solid rgba(255,214,128,.9);outline-offset:-3px}
 }
 
+/* ============================================================
+   超级奖励：结果面板 / 彩池四位重置 / 中心提示 / 锁定反馈
+   ============================================================ */
+.lever-result{
+  position:absolute;inset:0;z-index:5;display:grid;place-items:center;
+  border-radius:inherit;
+  background:radial-gradient(circle at 50% 38%,rgba(64,30,6,.94),rgba(10,4,6,.97));
+  box-shadow:inset 0 0 0 1px rgba(255,214,120,.5),inset 0 0 30px rgba(255,150,40,.18);
+  opacity:0;pointer-events:none;transform:scale(.82);
+  transition:opacity .2s ease,transform .3s cubic-bezier(.34,1.45,.64,1);
+}
+.lever-result.on{opacity:1;transform:none}
+.lever-result svg{
+  width:46%;height:46%;
+  filter:drop-shadow(0 3px 6px rgba(0,0,0,.7)) drop-shadow(0 0 18px rgba(255,190,70,.55));
+  animation:leverResultPop .5s cubic-bezier(.34,1.5,.64,1);
+}
+@keyframes leverResultPop{0%{transform:scale(.4) rotate(-8deg)}60%{transform:scale(1.12)}100%{transform:none}}
+.lever-result b{
+  margin-top:3%;font-family:var(--font-cn);
+  font-size:clamp(12px,2cqw,20px);font-weight:900;color:#ffe8b4;letter-spacing:.14em;
+  text-shadow:0 1px 2px rgba(0,0,0,.6);
+}
+.lever-result em{
+  margin-top:1%;font-family:var(--font-num);font-style:normal;font-weight:900;
+  font-size:clamp(19px,4cqw,42px);line-height:1.05;
+  background:linear-gradient(180deg,#fffbe3 10%,#ffd24a 55%,#e07f10 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 2px 3px rgba(0,0,0,.55));
+  animation:leverAmountPop .55s .12s cubic-bezier(.34,1.5,.64,1) backwards;
+}
+@keyframes leverAmountPop{0%{transform:scale(.3);opacity:0}100%{transform:none;opacity:1}}
+
+/* 彩池四位重置滚轮 */
+.pool-reset{
+  position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;border-radius:inherit;
+  background:radial-gradient(circle at 50% 40%,rgba(48,20,46,.96),rgba(8,3,8,.98));
+  box-shadow:inset 0 0 0 1px rgba(255,214,120,.45);
+  opacity:0;pointer-events:none;transform:scale(.85);
+  transition:opacity .25s ease,transform .3s cubic-bezier(.34,1.4,.64,1);
+}
+.pool-reset.on{opacity:1;transform:none}
+.pool-reset__cap{
+  margin-bottom:7%;font-family:var(--font-cn);
+  font-size:clamp(10px,1.7cqw,16px);font-weight:900;color:#ffd98a;
+  letter-spacing:.32em;text-indent:.32em;text-shadow:0 0 12px rgba(255,180,60,.55);
+}
+.pool-reset__digits{display:flex;gap:clamp(3px,.55cqw,7px)}
+.pool-digit{
+  width:clamp(19px,3.5cqw,37px);height:clamp(25px,4.5cqw,47px);
+  overflow:hidden;border-radius:6px;
+  background:linear-gradient(180deg,rgba(0,0,0,.78),rgba(32,12,6,.88));
+  box-shadow:inset 0 0 0 1px rgba(255,206,93,.32),inset 0 2px 7px rgba(0,0,0,.85);
+}
+.pool-strip{will-change:transform}
+.pd-cell{
+  height:clamp(25px,4.5cqw,47px);display:grid;place-items:center;
+  font-family:var(--font-num);font-weight:900;font-size:clamp(14px,2.6cqw,27px);
+  color:#ffd45e;text-shadow:0 0 8px rgba(255,170,40,.45);
+}
+.pd-cell.hit{animation:pdHit .55s ease}
+@keyframes pdHit{0%{background:rgba(255,206,93,.6);color:#fff}100%{background:transparent}}
+.pool-reset.done .pool-digit{box-shadow:inset 0 0 0 1px rgba(255,206,93,.95),0 0 16px rgba(255,190,70,.55)}
+
+/* 中心浮动提示（锁定反馈） */
+.center-msg{
+  position:absolute;left:50%;top:6%;z-index:8;
+  padding:6px 15px;border-radius:999px;white-space:nowrap;pointer-events:none;
+  font-family:var(--font-cn);font-size:clamp(11px,1.5cqw,15px);font-weight:800;
+  color:#2a1600;letter-spacing:.06em;
+  background:linear-gradient(180deg,#ffe083,#e5a01b);
+  box-shadow:0 3px 12px rgba(0,0,0,.5),0 0 20px rgba(255,190,70,.45);
+  animation:centerMsg 2s ease forwards;
+}
+@keyframes centerMsg{
+  0%{opacity:0;transform:translate(-50%,10px) scale(.88)}
+  12%{opacity:1;transform:translate(-50%,0) scale(1)}
+  76%{opacity:1;transform:translate(-50%,0) scale(1)}
+  100%{opacity:0;transform:translate(-50%,-12px) scale(.95)}
+}
+
+/* 启动键被拦时的抖动 */
+.btn--spin.deny{animation:btnDeny .42s ease}
+@keyframes btnDeny{0%,100%{transform:translateX(0)}20%{transform:translateX(-5px)}40%{transform:translateX(5px)}60%{transform:translateX(-3px)}80%{transform:translateX(3px)}}
+
+/* 拉杆就绪：光柱 + 扫光 + 上下浮动（更明显） */
+.center-lever.ready::before{
+  content:"";position:absolute;left:50%;top:-17px;width:13px;height:17px;
+  transform:translateX(-50%);pointer-events:none;
+  background:linear-gradient(180deg,rgba(255,226,138,.95),rgba(255,180,60,0));
+  clip-path:polygon(50% 0,100% 100%,0 100%);
+  animation:leverBeam .55s ease-in-out infinite alternate;
+}
+@keyframes leverBeam{from{opacity:.3;transform:translateX(-50%) scaleY(.65)}to{opacity:1;transform:translateX(-50%) scaleY(1.2)}}
+.center-lever.ready::after{
+  content:"";position:absolute;inset:-5px;border-radius:14px;pointer-events:none;
+  background:linear-gradient(115deg,transparent 34%,rgba(255,255,255,.5) 48%,transparent 62%);
+  background-size:260% 100%;
+  animation:leverSweep 1.5s linear infinite;
+}
+@keyframes leverSweep{from{background-position:200% 0}to{background-position:-100% 0}}
+.center-lever.ready{animation:leverReady 1.5s ease-in-out infinite,leverFloat 1.7s ease-in-out infinite}
+@keyframes leverFloat{0%,100%{margin-top:0}50%{margin-top:-6px}}
+
 /* ------ buttons ------ */
 .actions{
   flex:0 0 auto;display:grid;grid-template-columns:1fr 1fr 1.03fr 1.34fr;gap:clamp(5px,.55vw,9px);
@@ -1347,6 +1452,22 @@ body.win-active .center-stage{opacity:0}
                   <div class="reel__strip" id="reel-strip"></div>
                   <i class="reel__edge reel__edge--t"></i>
                   <i class="reel__edge reel__edge--b"></i>
+                  <!-- 超级奖励结果：符号 + 金额 -->
+                  <div class="lever-result" id="lever-result">
+                    <svg viewBox="0 0 200 200"><use id="lever-result-use" href="#art-tiger"/></svg>
+                    <b id="lever-result-label">大虎头</b>
+                    <em id="lever-result-amount">+0</em>
+                  </div>
+                  <!-- 彩池重置：四位数随机滚轮（个位先停，千位最后） -->
+                  <div class="pool-reset" id="pool-reset">
+                    <div class="pool-reset__cap">彩池重置</div>
+                    <div class="pool-reset__digits">
+                      <div class="pool-digit" data-pos="3"><div class="pool-strip"></div></div>
+                      <div class="pool-digit" data-pos="2"><div class="pool-strip"></div></div>
+                      <div class="pool-digit" data-pos="1"><div class="pool-strip"></div></div>
+                      <div class="pool-digit" data-pos="0"><div class="pool-strip"></div></div>
+                    </div>
+                  </div>
                 </div>
 
                 <button class="center-lever" id="center-lever" type="button" disabled
@@ -1749,6 +1870,11 @@ const el = {
   centerLever: $('#center-lever'),
   reelStrip: $('#reel-strip'),
   poolNote: $('#pool-note'),
+  leverResult: $('#lever-result'),
+  leverResultUse: $('#lever-result-use'),
+  leverResultLabel: $('#lever-result-label'),
+  leverResultAmount: $('#lever-result-amount'),
+  poolReset: $('#pool-reset'),
   gate: $('#gate'),
   gateName: $('#gate-name'),
   gatePw: $('#gate-pw'),
@@ -2069,15 +2195,16 @@ function updateControls(){
   const totalBet = sumBets(state.bets);
   const lastTotal = state.lastBets ? sumBets(state.lastBets) : 0;
   const canAffordRepeat = lastTotal > 0 && state.credits + totalBet >= lastTotal;
-  const locked = state.busy || state.canGamble;
-  const hasWin = state.canGamble && state.bonusWin > 0 && !state.busy;
+  // 七灯已满未拉杆：画面"卡"在超级奖励，押注/收分/加倍/竞猜全部锁定
+  const locked = state.busy || state.canGamble || state.leverReady || !account.name;
+  const hasWin = state.canGamble && state.bonusWin > 0 && !state.busy && !state.leverReady;
   const canDouble = hasWin && !state.doubleUsed && state.credits >= state.bonusWin;
 
   for (let i = 0; i < PRIZES.length; i++) cardEls[PRIZES[i].id].disabled = locked;
 
   el.spin.classList.toggle('is-collect', hasWin);
   el.spin.classList.toggle('is-ready', !locked && !hasWin && totalBet > 0);
-  el.spin.disabled = state.busy || (!hasWin && (locked || (totalBet === 0 && !canAffordRepeat)));
+  el.spin.disabled = state.busy || (!hasWin && !state.leverReady && (locked || (totalBet === 0 && !canAffordRepeat)));
   setText(el.spinMain, hasWin ? '收分' : '启动');
   setText(el.spinSub, hasWin ? '+' + fmt(state.bonusWin) : 'SPIN');
 
@@ -2238,6 +2365,10 @@ const sound = (() => {
     lampsFull(){
       [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(f, .34, { type: 'triangle', gain: .05, delay: i * .1 }));
       noise(.5, .025, 2600, .7, .1);
+    },
+    digitStop(){
+      tone(880, .09, { type: 'triangle', gain: .05 });
+      tone(1320, .12, { type: 'sine', gain: .035, delay: .045 });
     },
     lever(){
       noise(.1, .05, 1800, .9);
@@ -3370,7 +3501,7 @@ function renderLamps(){
   const kids = el.centerLamps.children;
   for (let i = 0; i < kids.length; i++) kids[i].classList.toggle('on', i < lit);
   el.centerLamps.classList.toggle('is-full', lit >= LAMP_GOAL);
-  const canPull = state.leverReady && !state.leverBusy && !state.busy && !state.canGamble;
+  const canPull = state.leverReady && !state.leverBusy && !state.busy;
   el.centerLever.classList.toggle('ready', canPull);
   el.centerLever.disabled = !canPull;
   setText(el.poolNote, lit >= LAMP_GOAL ? '七灯已满 · 拉动拉杆' : '每次启动 · 半数投入进入彩池');
@@ -3393,6 +3524,8 @@ function lightLamp(){
     fx.celebrate('big', { x: r.left + r.width / 2, y: r.top + r.height / 2 });
   }
   renderLamps();
+  // 点满瞬间同步所有按钮状态（押注/收分/加倍/竞猜锁定，spin 留给拉杆提示）
+  if (state.leverReady) updateControls();
   return true;
 }
 
@@ -3441,7 +3574,7 @@ async function pullLever(){
   const hadGamble = state.canGamble;
   state.leverBusy = true;
   state.leverReady = false;
-  state.busy = true;                 // 锁住其它操作
+  state.busy = true;                 // 全程锁定：拉杆结果 + 彩池重置结束前不能操作
   state.phase = 'lever';
   renderLamps();
   updateControls();
@@ -3466,24 +3599,51 @@ async function pullLever(){
     })(t0);
   });
 
+  // ---------- 超级奖励结果 ----------
   const sym = POOL_SYMBOLS[pick];
   const amount = Math.max(0, Math.floor(state.jackpot * sym.share));
+  const poolCleared = sym.key === 'tiger';      // 大虎头 = 掏空彩池
   state.jackpot = Math.max(0, state.jackpot - amount);
+
+  el.leverResultUse.setAttribute('href', '#' + sym.art);
+  setText(el.leverResultLabel, sym.label);
+  setText(el.leverResultAmount, amount > 0 ? '+' + fmt(amount) : '彩池已空');
+  el.leverResult.classList.add('on');
   if (amount > 0){
+    // 积分直接入账（不可再赌大小），金币飞入积分窗 + LED 滚动
     state.credits += amount;
     renderJackpot();
     renderScore(true, amount);
+    fx.flyCoins(el.centerStage, el.creditLed, 16);
     sound.gambleWin();
     fx.coins(window.innerWidth / 2, window.innerHeight * .42, amount > 200 ? 26 : 14, 1);
     flashScreen();
-    marquee.celebrate(3000);
+    marquee.celebrate(3200);
   } else {
     sound.gambleLose();
   }
-  bumpLed(el.bonusLed);
-  floatLed(el.bonusLed, sym.label + (amount > 0 ? ' +' + fmt(amount) : ' 空池'));
+  floatLed(el.bonusLed, sym.label + (amount > 0 ? ' +' + fmt(amount) : ''));
   persistProfile();
-  await wait(1600);
+  await wait(1900);
+  el.leverResult.classList.remove('on');
+
+  // ---------- 大虎头清空彩池 → 四位数随机重置 ----------
+  if (poolCleared){
+    await wait(320);
+    el.poolReset.classList.add('on');
+    buildPoolStrips();
+    await wait(80);
+    const value = await runPoolReset();
+    el.poolReset.classList.add('done');
+    sound.lampsFull();
+    await wait(850);
+    state.jackpot = value;                     // 随机四位数成为新的彩池初始值
+    renderJackpot();                           // 彩池数字滚动到新值
+    floatLed(el.jackpot, '新彩池 ' + fmt(value));
+    persistProfile();
+    await wait(950);
+    el.poolReset.classList.remove('on', 'done');
+  }
 
   state.lamps = 0;
   state.leverBusy = false;
@@ -3491,8 +3651,77 @@ async function pullLever(){
   state.phase = 'idle';
   renderLamps();
   updateControls();
+  buildIdleReel();
   // 有待收奖金时不清盘（玩家的收分流程继续），没有才收尾
   if (!hadGamble) endRound(false);
+}
+
+/* 四位滚轮：每位 0-9 循环滚动，个位先停、千位最后，返回组成的四位数 */
+function buildPoolStrips(){
+  el.poolReset.querySelectorAll('.pool-strip').forEach(strip => {
+    let html = '';
+    for (let g = 0; g < 12; g++){
+      for (let d = 0; d < 10; d++) html += `<div class="pd-cell">${d}</div>`;
+    }
+    strip.innerHTML = html;
+    strip.style.transform = 'translateY(0px)';
+  });
+}
+
+function runPoolReset(){
+  return new Promise(resolve => {
+    const strips = Array.from(el.poolReset.querySelectorAll('.pool-strip'));
+    const cellH = strips[0].firstElementChild.getBoundingClientRect().height || 30;
+    const digits = new Array(4);
+    const durs = [900, 1250, 1600, 1950];       // 索引 = 位权（个十百千）
+    let done = 0;
+    strips.forEach(strip => {
+      const pos = Number(strip.parentElement.dataset.pos);
+      const target = randInt(0, 9);
+      digits[pos] = target;
+      const to = (11 * 10 + target) * cellH;    // 滚到最后一组的目标格
+      const dur = durs[pos];
+      const t0 = performance.now();
+      (function frame(now){
+        const p = Math.min(1, (now - t0) / dur);
+        const e = 1 - Math.pow(1 - p, 4);       // 快速启动、缓慢停止
+        strip.style.transform = `translateY(${-(to * e)}px)`;
+        if (p < 1) requestAnimationFrame(frame);
+        else {
+          const cell = strip.children[11 * 10 + target];
+          if (cell){
+            cell.classList.add('hit');
+            setTimeout(() => cell.classList.remove('hit'), 600);
+          }
+          sound.digitStop();
+          if (++done === 4){
+            setTimeout(() => resolve(Number(digits.join(''))), 650);
+          }
+        }
+      })(t0);
+    });
+  });
+}
+
+/* 中心浮动提示（锁定反馈用） */
+function showCenterMsg(text, ms = 2000){
+  const host = document.querySelector('.board__center');
+  if (!host) return;
+  const n = document.createElement('div');
+  n.className = 'center-msg';
+  n.textContent = text;
+  host.appendChild(n);
+  setTimeout(() => n.remove(), ms);
+}
+
+/* 七灯已满但还没拉杆：任何常规操作都被引导去拉杆 */
+function denyForLever(){
+  sound.error();
+  showCenterMsg('先拉动拉杆 · 领取超级奖励');
+  el.spin.classList.remove('deny');
+  void el.spin.offsetWidth;
+  el.spin.classList.add('deny');
+  setTimeout(() => el.spin.classList.remove('deny'), 460);
 }
 
 /* 拉杆：点一下或往下拖都能触发 */
@@ -3855,6 +4084,9 @@ function quickBetGroup(ids, node){
   }
 }
 
+/* 快速押注两种触发方式（效果相同：4 项押满 99，积分不足则平均分配）：
+   1) 双击标签
+   2) 长按标签 500ms（网页上双击可能触发浏览器缩放，长按是更稳的通道） */
 function bindQuickBet(){
   [[el.groupBig, BIG_IDS], [el.groupSmall, SMALL_IDS]].forEach(([node, ids]) => {
     const label = node.querySelector('.bet-group__label');
@@ -3862,7 +4094,30 @@ function bindQuickBet(){
     let last = 0;
     let timer = null;
     let cool = 0;                 // 触发后的短暂冷却，连点三下不会押两次
+    let holdTimer = null;
+    let holdFired = false;
+
+    const canQuick = () => account.name && !state.busy && !state.canGamble && !state.leverReady;
+
+    label.addEventListener('pointerdown', () => {
+      if (!canQuick()) return;
+      holdFired = false;
+      holdTimer = setTimeout(() => {
+        if (!canQuick()) return;
+        holdFired = true;
+        cool = Date.now() + 600;
+        quickBetGroup(ids, node);
+      }, 500);
+    });
+    const cancelHold = () => clearTimeout(holdTimer);
+    label.addEventListener('pointerleave', cancelHold);
+    label.addEventListener('pointercancel', cancelHold);
+    // 长按在触屏上会弹出系统菜单，屏蔽掉
+    label.addEventListener('contextmenu', e => e.preventDefault());
+
     label.addEventListener('pointerup', () => {
+      clearTimeout(holdTimer);
+      if (holdFired){ holdFired = false; return; }   // 长按已触发，忽略本次抬手
       const now = Date.now();
       if (now < cool) return;
       if (now - last < 340){
@@ -4011,6 +4266,7 @@ let resolveLock = 0;
 async function startSpin(){
   if (state.busy || state.canGamble) return;
   if (!account.name){ openGate(); return; }
+  if (state.leverReady){ denyForLever(); return; }
   const total = sumBets(state.bets);
   if (total === 0){
     const last = state.lastBets ? cloneBets(state.lastBets) : null;
@@ -4254,6 +4510,7 @@ async function runCardBonus(triggerIndex, roundId){
    ============================================================ */
 async function gamble(choice){
   if (!state.canGamble || state.busy || state.bonusWin <= 0) return;
+  if (state.leverReady){ sound.error(); return; }
   state.busy = true;
   state.canGamble = false;
   state.phase = 'gamble';
@@ -4343,6 +4600,7 @@ async function collectWinnings(){
    猜大小赢了以后会重新获得一次机会 —— 见 gamble()。 */
 function doubleUp(){
   if (state.busy || !state.canGamble) return;
+  if (state.leverReady){ sound.error(); return; }
   const cost = state.bonusWin;
   if (cost <= 0 || state.doubleUsed || state.credits < cost){ sound.error(); return; }
   state.credits -= cost;
@@ -4356,9 +4614,10 @@ function doubleUp(){
   updateControls();
 }
 
-/* 主按钮：有奖就是收分，没奖就是启动 */
+/* 主按钮：有待收奖金且未触发超级奖励 → 收分；否则启动 */
 function onPrimary(){
   if (state.busy) return;
+  if (state.leverReady){ denyForLever(); return; }
   if (state.canGamble && state.bonusWin > 0){ collectWinnings(); return; }
   startSpin();
 }
