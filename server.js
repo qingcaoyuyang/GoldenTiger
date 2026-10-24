@@ -66,6 +66,15 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 `);
 
+// 迁移：为已有 users 表补充 game_state 列（服务端权威状态）
+{
+  const cols = db.prepare("PRAGMA table_info(users)").all();
+  if (!cols.some(c => c.name === 'game_state')){
+    db.exec("ALTER TABLE users ADD COLUMN game_state TEXT");
+    console.log('[GoldenTiger] 已为 users 表添加 game_state 列（旧账号首次登录时自动迁移）');
+  }
+}
+
 // 启动时清理过期 session
 db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(new Date().toISOString());
 
@@ -131,7 +140,8 @@ function publicUser(row) {
     jackpot: row.jackpot,
     best: row.best,
     rounds: row.rounds,
-    createdAt: row.created_at
+    createdAt: row.created_at,
+    state: loadGameState(row)          // 完整游戏状态（灯/押注/奖金/彩池/门禁）
   };
 }
 
@@ -311,6 +321,390 @@ function saveState(userId, patch) {
   return userStmt.byId.get(userId);
 }
 
+/* ============================================================
+   游戏状态机（服务端权威）
+   ------------------------------------------------------------
+   所有游戏逻辑在服务端计算，客户端只负责演出。
+   - 每用户一份完整状态（SQLite game_state 列，JSON）
+   - 乐观锁 version：客户端每次操作带上自己看到的 version，
+     不匹配即 409 并回传最新状态——多端无法分支、无法重放
+   - phase 门禁：idle（可下注/旋转）/ gamble（可收分/加倍/竞猜）/ lever（只可拉杆）
+   - 开奖、赔付、点灯、彩池、四位数重置全部服务端随机
+   ============================================================ */
+const PRIZES = [
+  { id:'bar3',   name:'大特奖', mult:100 },
+  { id:'seven',  name:'777',   mult:40 },
+  { id:'star',   name:'星星',  mult:30 },
+  { id:'melon',  name:'西瓜',  mult:25 },
+  { id:'bell',   name:'铃铛',  mult:20 },
+  { id:'lemon',  name:'柠檬',  mult:15 },
+  { id:'orange', name:'橙子',  mult:10 },
+  { id:'apple',  name:'苹果',  mult:5 }
+];
+const PRIZE = Object.fromEntries(PRIZES.map(p => [p.id, p]));
+const BIG_IDS = ['bar3','seven','star','melon'];
+const PATH_LEN = 24;
+const JACKPOT_BASE = 8888;
+const BET_MAX = 99;
+const LAMP_GOAL = 7;
+const POOL_SYMBOLS = [
+  { key:'tiger', label:'大虎头', share: 1 },
+  { key:'bar3',  label:'大特奖', share: .5 },
+  { key:'seven', label:'大七七', share: .25 }
+];
+
+/* 环形布局：与客户端 SLOT_LAYOUT 一致（顺时针，右上角起步） */
+const LUCKY_L = { lucky:'L' };
+const LUCKY_R = { lucky:'R' };
+const SLOT_LAYOUT = [
+  { id:'lemon' },
+  { id:'star', size:'small', boost:true }, { id:'star' }, LUCKY_R, { id:'apple' },
+  { id:'bell', size:'small', boost:true }, { id:'orange' }, { id:'bell' },
+  { id:'seven', size:'small', boost:true }, { id:'seven' },
+  { id:'apple' }, { id:'apple', size:'small', boost:true },
+  { id:'lemon' }, { id:'melon' }, { id:'melon', size:'small', boost:true },
+  LUCKY_L, { id:'apple' },
+  { id:'orange', size:'small', boost:true }, { id:'orange' },
+  { id:'bell' },
+  { id:'bar3', size:'small', special:50, name:'小特奖' }, { id:'bar3' },
+  { id:'apple' },
+  { id:'lemon', size:'small', boost:true }
+];
+
+function zeroBets(){ return Object.fromEntries(PRIZES.map(p => [p.id, 0])); }
+function sumBets(bets){ return PRIZES.reduce((s, p) => s + (Math.floor(Number(bets?.[p.id]) || 0)), 0); }
+function cloneBets(bets){
+  return Object.fromEntries(PRIZES.map(p => [p.id, Math.max(0, Math.min(BET_MAX, Math.floor(Number(bets?.[p.id]) || 0)))]));
+}
+function multiplierFor(cfg){
+  if (!cfg || cfg.lucky) return 0;
+  if (cfg.special) return cfg.special;
+  return cfg.size === 'small' ? 3 : (PRIZE[cfg.id]?.mult || 0);
+}
+function stripIndices(target, strip){
+  const count = Math.max(1, strip || 1);
+  const out = [];
+  for (let k = 0; k < count; k++) out.push((target - k + PATH_LEN) % PATH_LEN);
+  return out;
+}
+function cardStripIndices(target, strip){
+  const count = Math.max(1, strip || 1);
+  const out = [];
+  for (let k = 0; k < count; k++) out.push((target - k + PRIZES.length) % PRIZES.length);
+  return out;
+}
+function randInt(min, max){ return min + Math.floor(Math.random() * (max - min + 1)); }
+
+function defaultGameState(){
+  return {
+    v: 1,
+    credits: 100,
+    jackpot: JACKPOT_BASE,
+    lamps: 0,
+    leverReady: false,
+    bets: zeroBets(),
+    lastBets: null,
+    bonusWin: 0,
+    canGamble: false,
+    doubleUsed: false,
+    best: 100,
+    rounds: 0,
+    phase: 'idle'            // idle | gamble | lever
+  };
+}
+
+/* 读取（必要时从旧列迁移）并消毒状态 */
+function loadGameState(row){
+  if (!row) return defaultGameState();
+  let st = null;
+  if (row.game_state){
+    try { st = JSON.parse(row.game_state); } catch (e) { st = null; }
+  }
+  if (!st || typeof st !== 'object') st = defaultGameState();
+  const d = defaultGameState();
+  const clean = {
+    ...d, ...st,
+    bets: cloneBets(st.bets),
+    lastBets: st.lastBets ? cloneBets(st.lastBets) : null,
+    credits: Math.max(0, Math.min(1e9, Math.floor(Number(st.credits ?? d.credits)))),
+    jackpot: Math.max(0, Math.min(1e9, Math.floor(Number(st.jackpot ?? d.jackpot)))),
+    lamps: Math.max(0, Math.min(LAMP_GOAL, Math.floor(Number(st.lamps ?? 0)))),
+    best: Math.max(0, Math.min(1e9, Math.floor(Number(st.best ?? d.best)))),
+    rounds: Math.max(0, Math.floor(Number(st.rounds ?? 0))),
+    bonusWin: Math.max(0, Math.min(1e9, Math.floor(Number(st.bonusWin ?? 0)))),
+    doubleUsed: !!st.doubleUsed,
+    canGamble: !!st.canGamble,
+    leverReady: !!st.leverReady,
+    v: Math.max(1, Math.floor(Number(st.v ?? 1)))
+  };
+  // phase 由门禁字段推导，防止脏数据
+  clean.phase = clean.leverReady ? 'lever' : (clean.canGamble ? 'gamble' : 'idle');
+  return clean;
+}
+
+function saveGameState(userId, state){
+  const best = Math.max(state.best, state.credits);
+  state.best = best;
+  db.prepare('UPDATE users SET game_state = ?, credits = ?, jackpot = ?, best = ?, rounds = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(state), state.credits, state.jackpot, best, state.rounds, new Date().toISOString(), userId);
+}
+
+/* ============================================================
+   Action 执行器：state -> { ok, state, result?, error? }
+   ============================================================ */
+function gameAction(st, action, payload = {}){
+  const S = st;
+  const bump = () => { S.v = (S.v || 1) + 1; };
+
+  // ---------- 下注 ----------
+  if (action === 'bet'){
+    if (S.phase !== 'idle') return { ok:false, error:'当前不能下注' };
+    const id = String(payload.id || '');
+    if (!PRIZE[id]) return { ok:false, error:'未知押注项' };
+    const n = Math.floor(Number(payload.n || 1));
+    if (!Number.isFinite(n) || n < 1) return { ok:false, error:'押注数量不合法' };
+    const cur = S.bets[id] || 0;
+    const add = Math.min(n, BET_MAX - cur, S.credits);
+    if (add <= 0) return { ok:false, error: cur >= BET_MAX ? '该项已押满' : '积分不足' };
+    S.credits -= add;
+    S.bets[id] = cur + add;
+    bump();
+    return { ok:true, state:S, result:{ id, added:add } };
+  }
+
+  // ---------- 清空押注（退还） ----------
+  if (action === 'clearBets'){
+    if (S.phase !== 'idle') return { ok:false, error:'当前不能清空' };
+    const total = sumBets(S.bets);
+    if (!total) return { ok:true, state:S, result:{} };
+    S.credits += total;
+    S.bets = zeroBets();
+    bump();
+    return { ok:true, state:S, result:{ refund:total } };
+  }
+
+  // ---------- 重复上次押注 ----------
+  if (action === 'repeatBets'){
+    if (S.phase !== 'idle') return { ok:false, error:'当前不能重复押注' };
+    const last = S.lastBets ? cloneBets(S.lastBets) : null;
+    const total = last ? sumBets(last) : 0;
+    if (!total) return { ok:false, error:'没有可重复的押注' };
+    if (S.credits < total) return { ok:false, error:'积分不足' };
+    S.credits -= total;
+    S.bets = last;
+    bump();
+    return { ok:true, state:S, result:{ total } };
+  }
+
+  // ---------- 快速押注（双击/长按 大/小） ----------
+  if (action === 'quickBet'){
+    if (S.phase !== 'idle') return { ok:false, error:'当前不能快速押注' };
+    const ids = payload.group === 'big' ? BIG_IDS : PRIZES.filter(p => !BIG_IDS.includes(p.id)).map(p => p.id);
+    if (payload.group !== 'big' && payload.group !== 'small') return { ok:false, error:'未知分组' };
+    const cur = ids.map(id => S.bets[id] || 0);
+    const need = cur.reduce((s, b) => s + (BET_MAX - b), 0);
+    if (S.credits >= need){
+      ids.forEach(id => { S.bets[id] = BET_MAX; });
+      S.credits -= need;
+    } else {
+      const per = Math.floor(S.credits / ids.length);
+      if (per <= 0) return { ok:false, error:'积分不足' };
+      let spent = 0;
+      ids.forEach((id, i) => {
+        const target = Math.min(BET_MAX, cur[i] + per);
+        S.bets[id] = target;
+        spent += target - cur[i];
+      });
+      S.credits -= spent;
+    }
+    bump();
+    return { ok:true, state:S, result:{ bets:cloneBets(S.bets) } };
+  }
+
+  // ---------- 旋转（服务端开奖） ----------
+  if (action === 'spin'){
+    if (S.phase !== 'idle') return { ok:false, error:'当前回合未结束' };
+    if (S.leverReady) return { ok:false, error:'请先拉动拉杆领取超级奖励' };
+    // 无押注时自动重复上次
+    let total = sumBets(S.bets);
+    if (total === 0){
+      const last = S.lastBets ? cloneBets(S.lastBets) : null;
+      const lastTotal = last ? sumBets(last) : 0;
+      if (lastTotal > 0 && S.credits >= lastTotal){
+        S.credits -= lastTotal;
+        S.bets = last;
+        total = lastTotal;
+      } else {
+        return { ok:false, error:'请先下注' };
+      }
+    }
+    const wagered = sumBets(S.bets);
+    S.credits -= wagered;
+    S.lastBets = cloneBets(S.bets);
+    const poolAdd = Math.floor(wagered / 2);
+    S.jackpot += poolAdd;
+    S.bonusWin = 0;
+    S.canGamble = false;
+    S.rounds += 1;
+
+    const target = randInt(0, PATH_LEN - 1);
+    const cfg = SLOT_LAYOUT[target];
+    let result;
+
+    if (cfg.lucky === 'L'){
+      // 左侧幸运格：灯光横扫
+      const strip = randInt(3, 7);
+      const sweep = randInt(0, PATH_LEN - 1);
+      const indices = stripIndices(sweep, strip);
+      const winners = [];
+      let win = 0;
+      indices.forEach(idx => {
+        const c = SLOT_LAYOUT[idx];
+        if (!c || c.lucky) return;
+        const bet = S.lastBets[c.id] || 0;
+        const mult = multiplierFor(c);
+        if (bet > 0 && mult > 0){
+          const amount = bet * mult;
+          win += amount;
+          winners.push({ idx, id:c.id, bet, mult, amount });
+        }
+      });
+      if (S.lamps < LAMP_GOAL) S.lamps += 1;
+      result = { kind:'grid', target, strip, sweep, winners, win };
+      S.bonusWin = win;
+      S.canGamble = win > 0;
+    } else if (cfg.lucky === 'R'){
+      // 右侧幸运格：五灯连环
+      const chase = randInt(0, PRIZES.length - 1);
+      const indices = cardStripIndices(chase, 5);
+      const winners = [];
+      let win = 0;
+      indices.forEach(pi => {
+        const prize = PRIZES[pi];
+        const bet = S.lastBets[prize.id] || 0;
+        if (bet > 0){
+          const amount = bet * prize.mult;
+          win += amount;
+          winners.push({ card:pi, id:prize.id, bet, amount });
+        }
+      });
+      if (S.lamps < LAMP_GOAL) S.lamps += 1;
+      result = { kind:'card', target, chase, winners, win };
+      S.bonusWin = win;
+      S.canGamble = win > 0;
+    } else {
+      // 普通格
+      const bet = S.lastBets[cfg.id] || 0;
+      const mult = multiplierFor(cfg);
+      const won = bet > 0 && mult > 0;
+      const win = won ? bet * mult : 0;
+      const isJackpot = cfg.id === 'seven' && cfg.size !== 'small';
+      let lampLit = false;
+      if (won && (cfg.special || (cfg.id === 'seven' && cfg.size === 'small') || isJackpot)){
+        if (S.lamps < LAMP_GOAL){ S.lamps += 1; lampLit = true; }
+      }
+      result = { kind:'normal', target, won, win, mult, bet, isJackpot, lampLit, cfgId:cfg.id, size:cfg.size || null, special:cfg.special || null };
+      S.bonusWin = win;
+      S.canGamble = won;
+    }
+
+    // 结算尾态
+    S.bets = zeroBets();
+    S.doubleUsed = false;
+    if (S.lamps >= LAMP_GOAL && !S.leverReady){
+      S.leverReady = true;                 // 灯满：拉杆就绪，全锁
+    }
+    S.phase = S.leverReady ? 'lever' : (S.canGamble ? 'gamble' : 'idle');
+    bump();
+    return { ok:true, state:S, result:{ ...result, poolAdd, lampsAfter:S.lamps, leverReadyAfter:S.leverReady } };
+  }
+
+  // ---------- 收分 ----------
+  if (action === 'collect'){
+    if (!S.canGamble || S.bonusWin <= 0) return { ok:false, error:'没有可收取的奖金' };
+    if (S.leverReady) return { ok:false, error:'请先拉动拉杆领取超级奖励' };
+    const amount = S.bonusWin;
+    S.credits += amount;
+    S.bonusWin = 0;
+    S.canGamble = false;
+    S.doubleUsed = false;
+    S.bets = zeroBets();
+    S.phase = S.leverReady ? 'lever' : 'idle';
+    bump();
+    return { ok:true, state:S, result:{ amount } };
+  }
+
+  // ---------- 加倍 ----------
+  if (action === 'double'){
+    if (!S.canGamble || S.bonusWin <= 0) return { ok:false, error:'没有可加倍的奖金' };
+    if (S.leverReady) return { ok:false, error:'请先拉动拉杆领取超级奖励' };
+    if (S.doubleUsed) return { ok:false, error:'本次中奖已加倍' };
+    if (S.credits < S.bonusWin) return { ok:false, error:'积分不足' };
+    S.credits -= S.bonusWin;
+    S.bonusWin *= 2;
+    S.doubleUsed = true;
+    bump();
+    return { ok:true, state:S, result:{ cost:S.bonusWin / 2 } };
+  }
+
+  // ---------- 买大 / 买小 ----------
+  if (action === 'gamble'){
+    if (!S.canGamble || S.bonusWin <= 0) return { ok:false, error:'当前不能竞猜' };
+    if (S.leverReady) return { ok:false, error:'请先拉动拉杆领取超级奖励' };
+    const side = payload.side;
+    if (side !== 'big' && side !== 'small') return { ok:false, error:'未知方向' };
+    const roll = randInt(1, 12);
+    const result = roll <= 6 ? 'small' : 'big';
+    const win = side === result;
+    if (win){
+      S.bonusWin *= 2;
+      S.doubleUsed = false;
+      S.canGamble = true;
+      S.phase = 'gamble';
+    } else {
+      S.bonusWin = 0;
+      S.canGamble = false;
+      S.doubleUsed = false;
+      S.bets = zeroBets();
+      S.phase = 'idle';
+    }
+    bump();
+    return { ok:true, state:S, result:{ roll, outcome:result, win } };
+  }
+
+  // ---------- 拉杆（超级奖励） ----------
+  if (action === 'lever'){
+    if (!S.leverReady) return { ok:false, error:'拉杆未就绪' };
+    const pick = randInt(0, POOL_SYMBOLS.length - 1);
+    const sym = POOL_SYMBOLS[pick];
+    const amount = Math.max(0, Math.floor(S.jackpot * sym.share));
+    S.jackpot = Math.max(0, S.jackpot - amount);
+    if (amount > 0) S.credits += amount;
+    let resetDigits = null;
+    if (sym.key === 'tiger'){
+      // 大虎头掏空彩池 → 四位数随机重置（个位到千位）
+      resetDigits = [randInt(0,9), randInt(0,9), randInt(0,9), randInt(0,9)];
+      S.jackpot = Number(resetDigits.join(''));
+    }
+    S.lamps = 0;
+    S.leverReady = false;
+    S.phase = S.canGamble ? 'gamble' : 'idle';   // 有待收奖金则保留
+    bump();
+    return { ok:true, state:S, result:{ pick, label:sym.label, amount, poolCleared:sym.key === 'tiger', resetDigits } };
+  }
+
+  // ---------- 重置 ----------
+  if (action === 'reset'){
+    if (S.credits > 100) return { ok:false, error:'积分高于 100，不可重置' };
+    const fresh = defaultGameState();
+    fresh.v = (S.v || 1) + 1;
+    fresh.best = Math.max(S.best, 100);
+    return { ok:true, state:fresh, result:{} };
+  }
+
+  return { ok:false, error:'未知操作' };
+}
+
 async function handleApi(req, res, pathname) {
   const ip = clientIp(req);
 
@@ -374,25 +768,38 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true });
   }
 
-  // ---------- 当前身份 ----------
+  // ---------- 当前身份（含完整游戏状态） ----------
   if (pathname === '/api/me' && req.method === 'GET') {
     const user = sessionUser(req);
     if (!user) return sendJson(res, 401, { error: '未登录' });
     return sendJson(res, 200, { user: publicUser(user) });
   }
 
-  // ---------- 保存游戏状态 ----------
-  if (pathname === '/api/state' && req.method === 'POST') {
+  // ---------- 游戏操作（服务端权威状态机） ----------
+  if (pathname === '/api/game/action' && req.method === 'POST') {
     const user = sessionUser(req);
     if (!user) return sendJson(res, 401, { error: '未登录' });
-    if (!rateLimit(`state:${user.id}`, 30, 10000)) {
-      return sendJson(res, 429, { error: '保存过于频繁' });
+    if (!rateLimit(`game:${user.id}`, 90, 10000)){
+      return sendJson(res, 429, { error: '操作过于频繁' });
     }
     const body = await readBody(req);
-    const saved = saveState(user.id, body);
-    if (!saved) return sendJson(res, 400, { error: '数据不合法' });
-    return sendJson(res, 200, { user: publicUser(saved) });
+    const action = String(body.action || '');
+    const st = loadGameState(user);
+    // 乐观锁：客户端必须基于最新 version 操作，否则拒绝并回传最新状态（防分支/防重放）
+    const clientV = Math.floor(Number(body.v));
+    if (!Number.isFinite(clientV) || clientV !== st.v){
+      return sendJson(res, 409, { error: '状态已更新，请同步', state: st });
+    }
+    const r = gameAction(st, action, body.payload || {});
+    if (!r.ok){
+      // 失败也持久化（部分 action 失败前无副作用，这里统一不写库）
+      return sendJson(res, 400, { error: r.error, state: st });
+    }
+    saveGameState(user.id, r.state);
+    return sendJson(res, 200, { ok: true, state: r.state, result: r.result || {} });
   }
+
+
 
   // ---------- 排行榜（全服，按最高分） ----------
   if (pathname === '/api/leaderboard' && req.method === 'GET') {
