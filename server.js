@@ -525,7 +525,7 @@ function gameAction(st, action, payload = {}){
   if (action === 'spin'){
     if (S.phase !== 'idle') return { ok:false, error:'当前回合未结束' };
     if (S.leverReady) return { ok:false, error:'请先拉动拉杆领取超级奖励' };
-    // 无押注时自动重复上次
+    // 无押注时自动重复上次（这条路径的钱没扣过，需要扣）
     let total = sumBets(S.bets);
     if (total === 0){
       const last = S.lastBets ? cloneBets(S.lastBets) : null;
@@ -538,8 +538,8 @@ function gameAction(st, action, payload = {}){
         return { ok:false, error:'请先下注' };
       }
     }
+    // 注意：普通路径下注时已扣过钱（bet action），这里绝不能重复扣
     const wagered = sumBets(S.bets);
-    S.credits -= wagered;
     S.lastBets = cloneBets(S.bets);
     const poolAdd = Math.floor(wagered / 2);
     S.jackpot += poolAdd;
@@ -786,8 +786,12 @@ async function handleApi(req, res, pathname) {
     const action = String(body.action || '');
     const st = loadGameState(user);
     // 乐观锁：客户端必须基于最新 version 操作，否则拒绝并回传最新状态（防分支/防重放）
+    // 例外：'bet' 是纯累加操作（credits -= n、bets[id] += n），基于最新服务端状态执行
+    // 结果唯一、不会分叉，因此允许 version 落后时执行——否则「连续下注 + 期间其他操作」
+    // 会因版本过期把玩家已下的注同步掉，表现为押注数字乱跳。
     const clientV = Math.floor(Number(body.v));
-    if (!Number.isFinite(clientV) || clientV !== st.v){
+    const additive = action === 'bet';
+    if (!additive && (!Number.isFinite(clientV) || clientV !== st.v)){
       return sendJson(res, 409, { error: '状态已更新，请同步', state: st });
     }
     const r = gameAction(st, action, body.payload || {});

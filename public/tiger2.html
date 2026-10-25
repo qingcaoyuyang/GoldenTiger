@@ -3653,7 +3653,7 @@ async function pullLever(){
     el.poolReset.classList.remove('on', 'done');
     state.leverBusy = false;
     state.busy = false;
-    state.phase = 'idle';
+    state.phase = state.leverReady ? 'lever' : (state.canGamble ? 'gamble' : 'idle');
     renderLamps();
     updateControls();
     buildIdleReel();
@@ -3829,7 +3829,7 @@ function endRound(clearBets = true){
   state.bonusWin = 0;
   state.canGamble = false;
   state.busy = false;
-  state.phase = 'idle';
+  state.phase = state.leverReady ? 'lever' : 'idle';
   state.doubleUsed = false;
   renderBonus();
   renderBets();
@@ -3894,20 +3894,32 @@ function applyServerState(s){
   state.best = s.best;
   state.rounds = s.rounds;
   state.v = s.v;
+  // phase 以服务端逻辑态为准（idle/gamble/lever）；演出态只在演出内存活
+  state.phase = s.phase || 'idle';
   renderAll(false);
   renderLamps();
   renderAccount();
 }
 
 /* 统一操作入口：带乐观锁重试。409（版本过期/多端分支）时先同步最新状态，
-   再用新版本重放一次——保证操作最终生效且不丢。 */
+   再用新版本重放一次——保证操作最终生效且不丢。
+   所有写操作走同一条串行队列：避免「重复/清空」与「下注提交」并发时
+   本地乐观状态与服务端状态互相覆盖导致的显示乱跳。 */
+let actionChain = Promise.resolve();
+function enqueueAction(fn){
+  const run = actionChain.then(fn, fn);      // 前一个成败不影响后一个执行
+  actionChain = run.then(() => {}, () => {});
+  return run;
+}
 async function gameAct(act, payload, retry = true){
-  const r = await api.action(act, payload);
-  if (!r.ok && r.status === 409 && retry){
-    applyServerState(r.data.state);
-    return gameAct(act, payload, false);
-  }
-  return r;
+  return enqueueAction(async () => {
+    const r = await api.action(act, payload);
+    if (!r.ok && r.status === 409 && retry){
+      applyServerState(r.data.state);
+      return gameAct(act, payload, false);
+    }
+    return r;
+  });
 }
 
 function rankListHtml(){
@@ -4045,17 +4057,49 @@ function submitBet(id, add){
   const p = betPending[id];
   p.n += add;
   clearTimeout(p.timer);
-  p.timer = setTimeout(async () => {
+  p.timer = setTimeout(() => {
     const n = p.n;
     p.n = 0;
     if (n <= 0) return;
-    const r = await gameAct('bet', { id, n });
-    if (!r.ok){
-      applyServerState(r.data.state);   // 回滚（服务端权威）
-      if (r.data.error) showCenterMsg(r.data.error, 1400);
-      sound.error();
-    }
+    // 走串行队列：与「重复/清空/快速押注」不会交叉覆盖
+    gameAct('bet', { id, n }).then(r => {
+      if (!r.ok){
+        applyServerState(r.data.state);   // 回滚（服务端权威）
+        if (r.data.error) showCenterMsg(r.data.error, 1400);
+        sound.error();
+        return;
+      }
+      // 成功：只同步 version（bets/credits 本地已乐观更新且与服务端一致），
+      // 让后续操作不会因为版本落后被拒
+      state.v = r.data.state.v;
+      const added = (r.data.result && r.data.result.added) || 0;
+      if (added !== n) applyServerState(r.data.state);   // 服务端只扣了一部分 → 校正显示
+    });
   }, 90);
+}
+
+/* 把防抖窗口里还没提交的押注立即提交（在其他操作之前入队），
+   避免「点启动/清空/重复」跑在押注前面。 */
+function flushBets(){
+  Object.keys(betPending).forEach(id => {
+    const p = betPending[id];
+    if (!p) return;
+    clearTimeout(p.timer);
+    const n = p.n;
+    p.n = 0;
+    if (n <= 0) return;
+    gameAct('bet', { id, n }).then(r => {
+      if (!r.ok){
+        applyServerState(r.data.state);
+        if (r.data.error) showCenterMsg(r.data.error, 1400);
+        sound.error();
+        return;
+      }
+      state.v = r.data.state.v;
+      const added = (r.data.result && r.data.result.added) || 0;
+      if (added !== n) applyServerState(r.data.state);
+    });
+  });
 }
 
 function applyBetDelta(id, amount, quiet = false){
@@ -4086,6 +4130,7 @@ const SMALL_IDS = PRIZES.map(p => p.id).filter(id => !BIG_IDS.includes(id));
 async function quickBetGroup(group, node){
   if (!account.name){ openGate(); return; }
   if (state.busy || state.canGamble || state.leverReady){ sound.error(); return; }
+  flushBets();
   const r = await gameAct('quickBet', { group });
   if (!r.ok){
     if (r.data.error) showCenterMsg(r.data.error, 1400);
@@ -4221,43 +4266,44 @@ function endAllBetPresses(){
 
 async function clearBets(){
   if (state.busy || state.canGamble || state.leverReady) return;
-  const total = sumBets(state.bets);
-  if (!total) return;
-  state.credits += total;
-  state.bets = zeroBets();
-  renderScore(true);
-  floatLed(el.creditLed, '+' + fmt(total));
-  renderBets();
-  updateControls();
-  sound.click();
+  if (!sumBets(state.bets)) return;
+  flushBets();                       // 先把未提交的押注提交掉，保证两边一致
+  // 退还以服务端为准（本地乐观退还会与服务端实际押注数不一致，导致数字乱跳）
   const r = await gameAct('clearBets', {});
-  if (!r.ok) applyServerState(r.data.state);
+  if (!r.ok){
+    applyServerState(r.data.state);
+    if (r.data.error) showCenterMsg(r.data.error, 1400);
+    sound.error();
+    return;
+  }
+  applyServerState(r.data.state);
+  floatLed(el.creditLed, '+' + fmt(r.data.result.refund || 0));
+  sound.click();
 }
 
 async function repeatBets(){
   if (state.busy || state.canGamble || state.leverReady) return;
+  flushBets();
   const last = state.lastBets ? cloneBets(state.lastBets) : null;
   const lastTotal = last ? sumBets(last) : 0;
   if (!lastTotal){
     sound.error();
     return;
   }
-  const current = sumBets(state.bets);
-  if (state.credits + current < lastTotal){
+  if (state.credits + sumBets(state.bets) < lastTotal){
     sound.error();
     return;
   }
-  state.credits += current - lastTotal;
-  state.bets = last;
-  renderScore(true);
-  renderBets();
-  updateControls();
-  sound.bet();
+  // 同清空：以服务端结果为准，避免本地与服务端押注集不一致
   const r = await gameAct('repeatBets', {});
   if (!r.ok){
     applyServerState(r.data.state);
     if (r.data.error) showCenterMsg(r.data.error, 1400);
+    sound.error();
+    return;
   }
+  applyServerState(r.data.state);
+  sound.bet();
 }
 
 /* ============================================================
@@ -4272,6 +4318,7 @@ async function startSpin(){
   if (state.busy || state.canGamble) return;
   if (!account.name){ openGate(); return; }
   if (state.leverReady){ denyForLever(); return; }
+  flushBets();
 
   // 提交旋转：服务端完成扣注、彩池注入、随机落点、结算、点灯
   const r = await gameAct('spin', {});
@@ -4281,7 +4328,9 @@ async function startSpin(){
     return;
   }
   const res = r.data.result;
-  applyServerState(r.data.state);          // 服务端新状态立即生效
+  // 关键：服务端状态先不落地——玩家没看到结果之前，奖金/积分不能提前上屏。
+  // 整场演出（跑灯 + 结算）结束后才 applyServerState。
+  const serverState = r.data.state;
   const roundId = ++resolveLock;
   state.busy = true;                       // 本地演出锁
   state.phase = 'spin';
@@ -4300,28 +4349,28 @@ async function startSpin(){
   await wait(230);
   if (roundId !== resolveLock) return;
   el.spin.classList.remove('is-spinning');
-  await playResolve(res, roundId);
+  await playResolve(res, roundId, serverState);
 }
 
-async function playResolve(res, roundId){
-  if (res.kind === 'grid') return playGrid(res, roundId);
-  if (res.kind === 'card') return playCard(res, roundId);
-  return playNormal(res, roundId);
+async function playResolve(res, roundId, serverState){
+  if (res.kind === 'grid') return playGrid(res, roundId, serverState);
+  if (res.kind === 'card') return playCard(res, roundId, serverState);
+  return playNormal(res, roundId, serverState);
 }
 
-/* 灯亮动画：状态由服务端推进（applyServerState 已渲染），这里只补弹跳特效 */
-function animateLampLit(){
-  const idx = Math.min(state.lamps, LAMP_GOAL) - 1;
+/* 灯亮动画：lampsAfter 来自服务端结果（演出时本地灯数尚未落地） */
+function animateLampLit(lampsAfter){
+  const idx = Math.min(lampsAfter == null ? state.lamps : lampsAfter, LAMP_GOAL) - 1;
   const kid = el.centerLamps.children[idx];
   if (kid){
     kid.classList.add('just-lit');
     setTimeout(() => kid.classList.remove('just-lit'), 520);
   }
-  if (state.leverReady) sound.lampsFull();
+  if (lampsAfter != null && lampsAfter >= LAMP_GOAL) sound.lampsFull();
 }
 
 /* ---------- 普通格结算演出 ---------- */
-async function playNormal(res, roundId){
+async function playNormal(res, roundId, serverState){
   state.phase = 'resolve';
   const cfg = cellData[res.target];
 
@@ -4329,10 +4378,8 @@ async function playNormal(res, roundId){
     sound.betLose();
     await wait(720);
     if (roundId !== resolveLock) return;
-    state.busy = false;
-    state.phase = 'idle';
-    renderLamps();
-    updateControls();
+    state.busy = false;                      // 先解锁
+    applyServerState(serverState);           // 再落地（updateControls 用正确的 busy 计算）
     return;
   }
 
@@ -4349,7 +4396,7 @@ async function playNormal(res, roundId){
   bumpLed(el.bonusLed);
   floatLed(el.bonusLed, '+' + fmt(res.win));
 
-  if (res.lampLit) animateLampLit();
+  if (res.lampLit) animateLampLit(res.lampsAfter);
 
   if (res.isJackpot){
     el.centerJackpot.classList.remove('is-hit');
@@ -4372,17 +4419,15 @@ async function playNormal(res, roundId){
 
   await wait(res.isJackpot ? 1900 : 880);
   if (roundId !== resolveLock) return;
-  state.busy = false;
-  state.phase = state.leverReady ? 'lever' : 'gamble';
-  renderLamps();
-  updateControls();
+  state.busy = false;                        // 先解锁
+  applyServerState(serverState);             // 演出结束：服务端状态落地
 }
 
 /* ---------- 左侧幸运格：灯光横扫演出 ---------- */
-async function playGrid(res, roundId){
+async function playGrid(res, roundId, serverState){
   state.phase = 'bonus';
   cellEls[res.target].classList.add('is-selected');
-  animateLampLit();
+  animateLampLit(res.lampsAfter);
   sound.bonus();
   await wait(420);
   if (roundId !== resolveLock) return;
@@ -4411,25 +4456,21 @@ async function playGrid(res, roundId){
     await wait(600);
     if (roundId !== resolveLock) return;
     state.busy = false;
-    state.phase = state.leverReady ? 'lever' : 'gamble';
-    renderLamps();
-    updateControls();
+    applyServerState(serverState);
   } else {
     sound.betLose();
     await wait(900);
     if (roundId !== resolveLock) return;
     state.busy = false;
-    state.phase = state.leverReady ? 'lever' : 'idle';
-    renderLamps();
-    updateControls();
+    applyServerState(serverState);
   }
 }
 
 /* ---------- 右侧幸运格：五灯连环演出 ---------- */
-async function playCard(res, roundId){
+async function playCard(res, roundId, serverState){
   state.phase = 'bonus';
   cellEls[res.target].classList.add('is-selected');
-  animateLampLit();
+  animateLampLit(res.lampsAfter);
   sound.bonus();
   await wait(340);
   if (roundId !== resolveLock) return;
@@ -4450,17 +4491,13 @@ async function playCard(res, roundId){
     await wait(600);
     if (roundId !== resolveLock) return;
     state.busy = false;
-    state.phase = state.leverReady ? 'lever' : 'gamble';
-    renderLamps();
-    updateControls();
+    applyServerState(serverState);
   } else {
     sound.betLose();
     await wait(900);
     if (roundId !== resolveLock) return;
     state.busy = false;
-    state.phase = state.leverReady ? 'lever' : 'idle';
-    renderLamps();
-    updateControls();
+    applyServerState(serverState);
   }
 }
 
