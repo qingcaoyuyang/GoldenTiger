@@ -1455,7 +1455,8 @@ body.win-active .center-stage{opacity:0}
 </head>
 <body>
   <!-- 账号：标准注册 / 登录（服务端 SQLite + session），积分全服持久化 -->
-  <div class="gate" id="gate">
+  <!-- 初始隐藏：有 session 的用户刷新时不再闪一下登录门；验证失败才由 bootAuth 弹出 -->
+  <div class="gate hidden" id="gate">
     <div class="gate__card">
       <div class="gate__seal"><svg viewBox="0 0 200 200"><use href="#art-tiger"></use></svg></div>
       <h1 class="gate__title">金虎水果机</h1>
