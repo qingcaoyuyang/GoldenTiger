@@ -3879,23 +3879,30 @@ function bestScore(){
 }
 
 /* 用服务端状态覆盖本地。本地 state 只是渲染缓存，
-   一切以服务端为准——多端切换、刷新恢复都走这里。 */
-function applyServerState(s){
+   一切以服务端为准——多端切换、刷新恢复都走这里。
+
+   deferWin = true：只延后「奖励分」相关字段（bonusWin / canGamble / doubleUsed）。
+   用于旋转——押注、扣分、彩池、点灯立刻显示（玩家马上看到这轮押了多少、扣了多少），
+   但中奖金额必须等演出结束才上屏，不能让玩家在看到结果前就领到奖励。 */
+function applyServerState(s, opts){
   if (!s) return;
+  const deferWin = !!(opts && opts.deferWin);
   state.credits = s.credits;
   state.jackpot = s.jackpot;
   state.lamps = s.lamps;
   state.leverReady = s.leverReady;
   state.bets = cloneBets(s.bets);
   state.lastBets = s.lastBets ? cloneBets(s.lastBets) : null;
-  state.bonusWin = s.bonusWin;
-  state.canGamble = s.canGamble;
-  state.doubleUsed = s.doubleUsed;
+  if (!deferWin){
+    state.bonusWin = s.bonusWin;
+    state.canGamble = s.canGamble;
+    state.doubleUsed = s.doubleUsed;
+    // phase 以服务端逻辑态为准（idle/gamble/lever）；演出态只在演出内存活
+    state.phase = s.phase || 'idle';
+  }
   state.best = s.best;
   state.rounds = s.rounds;
   state.v = s.v;
-  // phase 以服务端逻辑态为准（idle/gamble/lever）；演出态只在演出内存活
-  state.phase = s.phase || 'idle';
   renderAll(false);
   renderLamps();
   renderAccount();
@@ -4328,9 +4335,16 @@ async function startSpin(){
     return;
   }
   const res = r.data.result;
-  // 关键：服务端状态先不落地——玩家没看到结果之前，奖金/积分不能提前上屏。
-  // 整场演出（跑灯 + 结算）结束后才 applyServerState。
+  // 立刻落地「押注 / 扣分 / 彩池 / 点灯」——玩家马上看到这轮押了多少、扣了多少；
+  // 只有「奖励分」延后到演出结束（玩家没看到结果前不能领奖）。
   const serverState = r.data.state;
+  applyServerState(serverState, { deferWin: true });
+  // 演出期间 LED 继续显示「本轮实际押注」（服务端结算后 bets 已清空，
+  // 这里用 playedBets 还原，让玩家看得到自己这轮押了多少）
+  if (res.playedBets){
+    state.bets = cloneBets(res.playedBets);
+    renderBets();
+  }
   const roundId = ++resolveLock;
   state.busy = true;                       // 本地演出锁
   state.phase = 'spin';

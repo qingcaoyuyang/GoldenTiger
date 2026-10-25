@@ -489,7 +489,7 @@ function gameAction(st, action, payload = {}){
     const last = S.lastBets ? cloneBets(S.lastBets) : null;
     const total = last ? sumBets(last) : 0;
     if (!total) return { ok:false, error:'没有可重复的押注' };
-    if (S.credits < total) return { ok:false, error:'积分不足' };
+    if (S.credits < total) return { ok:false, error:`积分不足，无法重复上一轮押注（需要 ${total} 分，当前 ${S.credits} 分）` };
     S.credits -= total;
     S.bets = last;
     bump();
@@ -525,12 +525,17 @@ function gameAction(st, action, payload = {}){
   if (action === 'spin'){
     if (S.phase !== 'idle') return { ok:false, error:'当前回合未结束' };
     if (S.leverReady) return { ok:false, error:'请先拉动拉杆领取超级奖励' };
-    // 无押注时自动重复上次（这条路径的钱没扣过，需要扣）
+    // 无押注时：复制上一轮的押注（延续上一次的压分模式）并扣除相应积分。
+    // 上一轮的钱在上一轮已经扣过，这一轮是新的下注，所以这里要再扣一次。
     let total = sumBets(S.bets);
     if (total === 0){
       const last = S.lastBets ? cloneBets(S.lastBets) : null;
       const lastTotal = last ? sumBets(last) : 0;
-      if (lastTotal > 0 && S.credits >= lastTotal){
+      if (lastTotal > 0){
+        if (S.credits < lastTotal){
+          // 积分不足以支付上一轮押注 → 只能让玩家重新设计压分
+          return { ok:false, error:`积分不足，无法继续上一轮押注（需要 ${lastTotal} 分，当前 ${S.credits} 分）` };
+        }
         S.credits -= lastTotal;
         S.bets = last;
         total = lastTotal;
@@ -608,7 +613,9 @@ function gameAction(st, action, payload = {}){
       S.canGamble = won;
     }
 
-    // 结算尾态
+    // 结算尾态：本轮实际押注保存在 result.playedBets（演出期间显示用），
+    // bets 清空表示"本轮已结算"——下次点启动会自动复制 lastBets 并再次扣分
+    const playedBets = cloneBets(S.bets);
     S.bets = zeroBets();
     S.doubleUsed = false;
     if (S.lamps >= LAMP_GOAL && !S.leverReady){
@@ -616,7 +623,7 @@ function gameAction(st, action, payload = {}){
     }
     S.phase = S.leverReady ? 'lever' : (S.canGamble ? 'gamble' : 'idle');
     bump();
-    return { ok:true, state:S, result:{ ...result, poolAdd, lampsAfter:S.lamps, leverReadyAfter:S.leverReady } };
+    return { ok:true, state:S, result:{ ...result, playedBets, poolAdd, lampsAfter:S.lamps, leverReadyAfter:S.leverReady } };
   }
 
   // ---------- 收分 ----------
