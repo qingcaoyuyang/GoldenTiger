@@ -772,12 +772,18 @@ body.win-active .center-stage{opacity:0}
 .mini-btn--acct{max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* 账号：最高分 / 排行榜标题 / 禁用态 */
-/* 新手保护提示 */
-.newbie-note{
-  margin-top:5px;text-align:center;
-  font-size:10px;font-weight:800;letter-spacing:.08em;color:#ffd98a;
-  text-shadow:0 0 10px rgba(255,180,60,.45);
+/* 个人战绩 */
+.acct-stats{display:flex;flex-direction:column;gap:6px;margin:10px 0 4px}
+.acct-stat__grid{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 6px}
+.acct-stat{
+  display:flex;justify-content:space-between;align-items:baseline;gap:6px;
+  padding:3px 7px;border-radius:6px;background:rgba(255,255,255,.045);
+  font-size:11px;color:#c6b189;white-space:nowrap;
 }
+.acct-stat b{font-family:var(--font-num);font-weight:800;color:#ffd45e;font-size:12px}
+.acct-stat__cap{font-size:10px;color:#97876a;letter-spacing:.1em;margin-top:2px}
+.mini-btn--danger{border-color:rgba(255,120,90,.4);color:#ffb3a0}
+.mini-btn--danger.is-armed{background:rgba(255,90,60,.22);border-color:#ff8a5c;color:#fff}
 .rank-cap{margin:12px 0 0;font-size:10px;font-weight:700;letter-spacing:.14em;color:#8a7354;text-align:left}
 .acct-panel__best{display:flex;justify-content:space-between;align-items:baseline;padding:7px 0 3px;font-size:12px;color:#a98d66}
 .acct-panel__best b{font-family:var(--font-num);font-size:14px;color:#ffd45e;font-weight:900}
@@ -1420,9 +1426,11 @@ body.win-active .center-stage{opacity:0}
       <span id="acct-credits">100</span>
     </div>
     <div class="acct-panel__best">最高分 <b id="acct-best">100</b></div>
+    <div class="acct-stats" id="acct-stats"></div>
     <div class="rank-cap">全服排行榜 · 按最高分</div>
     <ol class="acct-panel__rank" id="acct-rank2"></ol>
     <div class="acct-panel__foot">
+      <button class="mini-btn mini-btn--danger" id="acct-reset" type="button">重置进度</button>
       <button class="mini-btn" id="acct-switch" type="button">退出登录</button>
     </div>
   </div>
@@ -1874,7 +1882,6 @@ const state = {
   busy: false,
   canGamble: false,
   forced: null,              // 下一把强制落点（仅测试账号生效：L 左幸运 / R 右幸运 / J 大七七）
-  newbie: { active: false, remaining: 0 },   // 新手保护（每 5 次启动保底一次幸运虎，共 6 次）
   muted: false,
   phase: 'idle',
   round: 0,
@@ -1937,6 +1944,8 @@ const el = {
   acctCredits: $('#acct-credits'),
   acctBest: $('#acct-best'),
   acctRank2: $('#acct-rank2'),
+  acctStats: $('#acct-stats'),
+  acctReset: $('#acct-reset'),
   acctSwitch: $('#acct-switch'),
   spin: $('#spin-button'),
   spinMain: $('#spin-main'),
@@ -2248,7 +2257,10 @@ function updateControls(){
 
   el.spin.classList.toggle('is-collect', hasWin);
   el.spin.classList.toggle('is-ready', !locked && !hasWin && totalBet > 0);
-  el.spin.disabled = state.busy || (!hasWin && !state.leverReady && (locked || (totalBet === 0 && !canAffordRepeat)));
+  // 注意：不要用「totalBet===0 && !canAffordRepeat」把启动键禁用掉——
+  // 那会让玩家看到"点了没反应"（积分不足以自动重复上一轮时）。
+  // 现在按钮始终可点，点下去由服务端给出明确提示（请先下注 / 积分不足，无法继续上一轮押注）。
+  el.spin.disabled = state.busy || (!hasWin && !state.leverReady && locked);
   setText(el.spinMain, hasWin ? '收分' : '启动');
   setText(el.spinSub, hasWin ? '+' + fmt(state.bonusWin) : 'SPIN');
 
@@ -3640,6 +3652,7 @@ async function pullLever(){
   el.centerLever.classList.add('pulled');
   setTimeout(() => el.centerLever.classList.remove('pulled'), 420);
 
+  const creditsBefore = state.credits;
   // 提交拉杆：服务端定三选一、金额、四位重置
   const r = await gameAct('lever', {});
   if (!r.ok){
@@ -3675,7 +3688,11 @@ async function pullLever(){
     setText(el.leverResultAmount, res.amount > 0 ? '+' + fmt(res.amount) : '彩池已空');
     el.leverResult.classList.add('on');
     if (res.amount > 0){
+      // 公告牌：显示本次 JACKPOT 领取的奖金
+      showWinOverlay('mega', 'JACKPOT', res.amount, '超级奖励 · 拉杆领取', 2200);
       sound.gambleWin();
+      // 奖金飞向积分窗的动效
+      fx.flyCoins(el.centerStage, el.creditLed, 18);
       fx.coins(window.innerWidth / 2, window.innerHeight * .42, res.amount > 200 ? 26 : 14, 1);
       flashScreen();
       marquee.celebrate(3200);
@@ -3703,6 +3720,8 @@ async function pullLever(){
     } else {
       applyServerState(r.data.state);
     }
+    // 奖金入账动效：Credit 从拉杆前的数值滚动上涨
+    if (res.amount > 0) rollCredits(res.amount, creditsBefore);
   } catch (err) {
     console.error('[lever] 演出异常，已兜底恢复', err);
     applyServerState(r.data.state);
@@ -3721,6 +3740,16 @@ async function pullLever(){
     renderLamps();
     updateControls();                      // 恢复「启动 / 收分」等按钮
   }
+}
+
+/* Credit 数字滚动上涨（奖金入账的视觉） */
+function rollCredits(amount, from){
+  if (!amount) return;
+  const to = state.credits;
+  state.credits = from;
+  renderScore(false);            // 先回到旧值，作为滚动起点
+  state.credits = to;
+  renderScore(true, amount);     // 滚动到新值 + 飘字
 }
 
 /* 四位滚轮内容：每位 0-9 × 12 组 */
@@ -4008,33 +4037,17 @@ function applyServerState(s, opts){
   }
   state.best = s.best;
   state.rounds = s.rounds;
+  state.totalWagered = s.totalWagered || 0;      // 累计消耗
+  state.totalCollected = s.totalCollected || 0;  // 累计领取
+  state.prizeHits = s.prizeHits || {};           // 各图案中奖次数
   state.v = s.v;
-  state.newbie = s.newbie || { active: false, remaining: 0 };
   renderAll(false);
   renderLamps();
   renderAccount();
-  renderNewbie();
     // deferWin = true（演出进行中）：灯 / 拉杆态 / 奖励分一律不落地——
     // 星星必须「先滚到、再点亮」，拉杆要等这一局结算完才出现。
 }
 
-/* 新手保护提示：还剩几次保底幸运虎 */
-function renderNewbie(){
-  const info = state.newbie || { active: false, remaining: 0 };
-  let node = document.getElementById('newbie-note');
-  if (!info.active){
-    if (node) node.remove();
-    return;
-  }
-  if (!node){
-    node = document.createElement('div');
-    node.id = 'newbie-note';
-    node.className = 'newbie-note';
-    const host = el.poolNote && el.poolNote.parentNode;
-    if (host) host.appendChild(node);
-  }
-  node.textContent = '新手保护 · 还剩 ' + info.remaining + ' 次幸运虎';
-}
 
 /* 统一操作入口：带乐观锁重试。409（版本过期/多端分支）时先同步最新状态，
    再用新版本重放一次——保证操作最终生效且不丢。
@@ -4048,10 +4061,13 @@ function enqueueAction(fn){
 }
 async function gameAct(act, payload, retry = true){
   return enqueueAction(async () => {
-    const r = await api.action(act, payload);
+    let r = await api.action(act, payload);
+    // 409（版本过期/多端分支）→ 同步最新状态后**在当前任务内直接重试**。
+    // 注意：这里绝不能再调 gameAct（那会重新入队 → 新任务排在自己后面 → 死锁，
+    // 表现为"点了没反应、必须刷新页面"）。
     if (!r.ok && r.status === 409 && retry){
       applyServerState(r.data.state);
-      return gameAct(act, payload, false);
+      r = await api.action(act, payload);
     }
     return r;
   });
@@ -4073,13 +4089,68 @@ async function refreshRank(){
   }
 }
 
+/* 个人战绩：总览 + 各图案中奖次数 */
+function statsHtml(){
+  const hits = state.prizeHits || {};
+  const row = (label, val) => `<div class="acct-stat"><span>${esc(label)}</span><b>${fmt(val)}</b></div>`;
+  const overview = [
+    row('开局次数', state.rounds || 0),
+    row('累计消耗', state.totalWagered || 0),
+    row('累计领取', state.totalCollected || 0),
+    row('当前积分', state.credits || 0)
+  ].join('');
+  const prizes = PRIZES.map(p => row(p.name, hits[p.id] || 0)).join('')
+    + row('左幸运虎', hits.luckyL || 0)
+    + row('右幸运虎', hits.luckyR || 0);
+  return `<div class="acct-stat__grid">${overview}</div>
+    <div class="acct-stat__cap">各图案中奖次数</div>
+    <div class="acct-stat__grid">${prizes}</div>`;
+}
+
 function renderAccount(){
   setText(el.acctChip, account.name || '未登录');
   setText(el.acctName, account.name || '未登录');
   setText(el.acctCredits, fmt(state.credits));
   setText(el.acctBest, fmt(bestScore()));
+  el.acctStats.innerHTML = statsHtml();
   el.acctRank2.innerHTML = rankListHtml();
   el.gateRank.innerHTML = rankListHtml();
+}
+
+/* 重置个人进度：需两次确认（5 秒内再点一次才执行）
+   执行后：积分回到 100、排行榜按 100 分重新排位、所有统计清零 */
+let acctResetArmed = 0;
+function bindAcctReset(){
+  el.acctReset.addEventListener('click', async () => {
+    const now = Date.now();
+    if (now - acctResetArmed > 5000){
+      acctResetArmed = now;
+      el.acctReset.textContent = '确认重置？';
+      el.acctReset.classList.add('is-armed');
+      setTimeout(() => {
+        if (Date.now() - acctResetArmed >= 5000){
+          acctResetArmed = 0;
+          el.acctReset.textContent = '重置进度';
+          el.acctReset.classList.remove('is-armed');
+        }
+      }, 5200);
+      return;
+    }
+    acctResetArmed = 0;
+    el.acctReset.textContent = '重置进度';
+    el.acctReset.classList.remove('is-armed');
+    const r = await gameAct('resetProgress', {});
+    if (!r.ok){
+      showCenterMsg(r.data.error || '重置失败', 1800);
+      sound.error();
+      return;
+    }
+    applyServerState(r.data.state);
+    renderAccount();
+    refreshRank();
+    showCenterMsg('进度已重置 · 积分回到 100', 2200);
+    sound.collect();
+  });
 }
 
 /* 登录门双 Tab：登录 / 注册 */
@@ -4453,6 +4524,20 @@ async function startSpin(){
   if (state.busy || state.canGamble) return;
   if (!account.name){ openGate(); return; }
   if (state.leverReady){ denyForLever(); return; }
+  // 本地先拦一道：没有押注时如果积分也不够自动重复上一轮，直接说明原因
+  if (sumBets(state.bets) === 0){
+    const lastTotal = state.lastBets ? sumBets(state.lastBets) : 0;
+    if (lastTotal > 0 && state.credits < lastTotal){
+      showCenterMsg('积分不足，无法继续上一轮押注（需要 ' + fmt(lastTotal) + ' 分，当前 ' + fmt(state.credits) + ' 分）', 2200);
+      sound.error();
+      return;
+    }
+    if (lastTotal === 0){
+      showCenterMsg('请先下注', 1500);
+      sound.error();
+      return;
+    }
+  }
   flushBets();
 
   // 提交旋转：服务端完成扣注、彩池注入、随机落点、结算、点灯
@@ -4522,7 +4607,6 @@ function revealLamp(lampsAfter){
 
 /* ---------- 普通格结算演出 ---------- */
 async function playNormal(res, roundId, serverState){
-  if (res.guaranteed) showCenterMsg('新手保护 · 幸运虎降临', 1600);
   state.phase = 'resolve';
   const cfg = cellData[res.target];
 
@@ -4577,7 +4661,6 @@ async function playNormal(res, roundId, serverState){
 
 /* ---------- 左侧幸运格：灯光横扫演出 ---------- */
 async function playGrid(res, roundId, serverState){
-  if (res.guaranteed) showCenterMsg('新手保护 · 幸运虎降临', 1600);
   state.phase = 'bonus';
   cellEls[res.target].classList.add('is-selected');
   revealLamp(res.lampsAfter);
@@ -4621,7 +4704,6 @@ async function playGrid(res, roundId, serverState){
 
 /* ---------- 右侧幸运格：五灯连环演出 ---------- */
 async function playCard(res, roundId, serverState){
-  if (res.guaranteed) showCenterMsg('新手保护 · 幸运虎降临', 1600);
   state.phase = 'bonus';
   cellEls[res.target].classList.add('is-selected');
   revealLamp(res.lampsAfter);
@@ -4896,6 +4978,7 @@ function init(){
   bindLever();
   bindAccount();
   bindQuickBet();
+  bindAcctReset();
   bindLuckyCheat();
   state.bets = zeroBets();
 

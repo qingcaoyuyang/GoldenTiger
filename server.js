@@ -420,7 +420,10 @@ function defaultGameState(){
     rounds: 0,
     phase: 'idle',           // idle | gamble | lever
     sinceLucky: 0,           // 距离下次保底幸运虎还差几次启动
-    luckyCount: 6            // 已获得的幸运虎次数（>=6 表示新手保护已用完）
+    luckyCount: 6,           // 已获得的幸运虎次数（>=6 表示新手保护已用完）
+    totalWagered: 0,         // 累计消耗积分
+    totalCollected: 0,       // 累计领取积分
+    prizeHits: {}            // 各图案中奖次数（幸运格记 luckyL / luckyR）
   };
 }
 
@@ -448,6 +451,9 @@ function loadGameState(row){
     leverReady: !!st.leverReady,
     sinceLucky: Math.max(0, Math.floor(Number(st.sinceLucky ?? 0))),
     luckyCount: Math.max(0, Math.floor(Number(st.luckyCount ?? NEWBIE_LUCKY_TOTAL))),
+    totalWagered: Math.max(0, Math.floor(Number(st.totalWagered ?? 0))),
+    totalCollected: Math.max(0, Math.floor(Number(st.totalCollected ?? 0))),
+    prizeHits: (st.prizeHits && typeof st.prizeHits === 'object') ? { ...st.prizeHits } : {},
     v: Math.max(1, Math.floor(Number(st.v ?? 1)))
   };
   // phase 由门禁字段推导，防止脏数据
@@ -574,6 +580,7 @@ function gameAction(st, action, payload = {}, ctx = {}){
     }
     // 注意：普通路径下注时已扣过钱（bet action），这里绝不能重复扣
     const wagered = sumBets(S.bets);
+    S.totalWagered = (S.totalWagered || 0) + wagered;      // 累计消耗统计
     S.lastBets = cloneBets(S.bets);
     const poolAdd = Math.floor(wagered / 2);
     S.jackpot += poolAdd;
@@ -595,9 +602,10 @@ function gameAction(st, action, payload = {}, ctx = {}){
         target = forced;
         result_forced = force;
       }
-    } else if (S.luckyCount < NEWBIE_LUCKY_TOTAL && S.sinceLucky >= NEWBIE_EVERY){
-      // 新手保护：每 5 次启动保底一次幸运虎（左/右随机），
-      // 累计拿满 6 次幸运虎后恢复正常概率。
+    } else if (S.luckyCount < NEWBIE_LUCKY_TOTAL && S.sinceLucky >= NEWBIE_EVERY - 1){
+      // 新手保护（后台策略，玩家不可见）：任意连续 5 把之内必出金虎。
+      // sinceLucky = 连续未出金虎的把数；达到 4 时这一把保底出 → 任意 5 把窗口内至少有 1 个。
+      // 位置不固定（自然命中会把窗口重置），累计 6 次幸运虎后恢复正常概率。
       target = randInt(0, 1) === 0 ? 15 : 3;
       guaranteed = true;
     }
@@ -628,6 +636,8 @@ function gameAction(st, action, payload = {}, ctx = {}){
         }
       });
       if (S.lamps < LAMP_GOAL) S.lamps += 1;
+      winners.forEach(w => { S.prizeHits[w.id] = (S.prizeHits[w.id] || 0) + 1; });
+      S.prizeHits.luckyL = (S.prizeHits.luckyL || 0) + 1;
       result = { kind:'grid', target, strip, sweep, winners, win };
       S.bonusWin = win;
       S.canGamble = win > 0;
@@ -647,6 +657,8 @@ function gameAction(st, action, payload = {}, ctx = {}){
         }
       });
       if (S.lamps < LAMP_GOAL) S.lamps += 1;
+      winners.forEach(w => { S.prizeHits[w.id] = (S.prizeHits[w.id] || 0) + 1; });
+      S.prizeHits.luckyR = (S.prizeHits.luckyR || 0) + 1;
       result = { kind:'card', target, chase, winners, win };
       S.bonusWin = win;
       S.canGamble = win > 0;
@@ -662,6 +674,7 @@ function gameAction(st, action, payload = {}, ctx = {}){
         if (S.lamps < LAMP_GOAL){ S.lamps += 1; lampLit = true; }
       }
       result = { kind:'normal', target, won, win, mult, bet, isJackpot, lampLit, cfgId:cfg.id, size:cfg.size || null, special:cfg.special || null };
+      if (won) S.prizeHits[cfg.id] = (S.prizeHits[cfg.id] || 0) + 1;
       S.bonusWin = win;
       S.canGamble = won;
     }
@@ -685,6 +698,7 @@ function gameAction(st, action, payload = {}, ctx = {}){
     if (S.leverReady) return { ok:false, error:'请先拉动拉杆领取超级奖励' };
     const amount = S.bonusWin;
     S.credits += amount;
+    S.totalCollected = (S.totalCollected || 0) + amount;   // 累计领取统计
     S.bonusWin = 0;
     S.canGamble = false;
     S.doubleUsed = false;
@@ -751,6 +765,24 @@ function gameAction(st, action, payload = {}, ctx = {}){
     S.phase = S.canGamble ? 'gamble' : 'idle';   // 有待收奖金则保留
     bump();
     return { ok:true, state:S, result:{ pick, label:sym.label, amount, poolCleared:sym.key === 'tiger', resetDigits } };
+  }
+
+  // ---------- 重置个人进度（积分回到 100，排行归位，统计清零） ----------
+  if (action === 'resetProgress'){
+    const fresh = defaultGameState();
+    fresh.v = (S.v || 1) + 1;
+    fresh.credits = 100;
+    fresh.best = 100;
+    fresh.rounds = 0;
+    fresh.jackpot = JACKPOT_BASE;
+    fresh.lamps = 0;
+    fresh.leverReady = false;
+    fresh.sinceLucky = 0;
+    fresh.luckyCount = 0;              // 重置后重新享受新手保护
+    fresh.totalWagered = 0;
+    fresh.totalCollected = 0;
+    fresh.prizeHits = {};
+    return { ok:true, state:fresh, result:{ reset:true } };
   }
 
   // ---------- 重置 ----------
