@@ -66,6 +66,24 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 `);
 
+// 全局共享彩池：所有玩家转动注入的积分都进这一个池，谁拉杆都从全局扣。
+// 表只有一行：key='jackpot'。
+db.exec(`CREATE TABLE IF NOT EXISTS game_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+
+function getPool(){
+  const row = db.prepare("SELECT value FROM game_meta WHERE key = 'jackpot'").get();
+  if (!row){
+    db.prepare("INSERT OR REPLACE INTO game_meta (key, value) VALUES ('jackpot', ?)").run(String(JACKPOT_BASE));
+    return JACKPOT_BASE;
+  }
+  return Math.max(0, Math.min(1e9, Math.floor(Number(row.value) || 0)));
+}
+function setPool(v){
+  const n = Math.max(0, Math.min(1e9, Math.floor(Number(v) || 0)));
+  db.prepare("INSERT OR REPLACE INTO game_meta (key, value) VALUES ('jackpot', ?)").run(String(n));
+  return n;
+}
+
 // 迁移：为已有 users 表补充 game_state 列（服务端权威状态）
 {
   const cols = db.prepare("PRAGMA table_info(users)").all();
@@ -463,6 +481,9 @@ function loadGameState(row){
     active: clean.luckyCount < NEWBIE_LUCKY_TOTAL,
     remaining: Math.max(0, NEWBIE_LUCKY_TOTAL - clean.luckyCount)
   };
+  // 全局共享彩池（派生，所有人看到同一个数）
+  clean.pool = getPool();
+  clean.jackpot = clean.pool;      // 旧字段也指向全局池，避免遗留代码读到个人池旧值
   return clean;
 }
 
@@ -471,7 +492,7 @@ function saveGameState(userId, state){
   state.best = best;
   const { newbie, ...persist } = state;      // newbie 是派生信息，不入库
   db.prepare('UPDATE users SET game_state = ?, credits = ?, jackpot = ?, best = ?, rounds = ?, updated_at = ? WHERE id = ?')
-    .run(JSON.stringify(persist), state.credits, state.jackpot, best, state.rounds, new Date().toISOString(), userId);
+    .run(JSON.stringify(persist), state.credits, getPool(), best, state.rounds, new Date().toISOString(), userId);
 }
 
 /* ============================================================
@@ -583,7 +604,9 @@ function gameAction(st, action, payload = {}, ctx = {}){
     S.totalWagered = (S.totalWagered || 0) + wagered;      // 累计消耗统计
     S.lastBets = cloneBets(S.bets);
     const poolAdd = Math.floor(wagered / 2);
-    S.jackpot += poolAdd;
+    // 全局共享彩池：这一把的一半押注注入公共池，所有玩家共同养大
+    setPool(getPool() + poolAdd);
+    S.pool = getPool();
     S.bonusWin = 0;
     S.canGamble = false;
     S.rounds += 1;
@@ -751,15 +774,18 @@ function gameAction(st, action, payload = {}, ctx = {}){
     if (!S.leverReady) return { ok:false, error:'拉杆未就绪' };
     const pick = randInt(0, POOL_SYMBOLS.length - 1);
     const sym = POOL_SYMBOLS[pick];
-    const amount = Math.max(0, Math.floor(S.jackpot * sym.share));
-    S.jackpot = Math.max(0, S.jackpot - amount);
+    // 全局共享彩池：按份额从公共池扣（单进程同步执行，不存在超扣）
+    const poolNow = getPool();
+    const amount = Math.max(0, Math.floor(poolNow * sym.share));
+    setPool(poolNow - amount);
     if (amount > 0) S.credits += amount;
     let resetDigits = null;
     if (sym.key === 'tiger'){
       // 大虎头掏空彩池 → 四位数随机重置（个位到千位）
       resetDigits = [randInt(0,9), randInt(0,9), randInt(0,9), randInt(0,9)];
-      S.jackpot = Number(resetDigits.join(''));
+      setPool(Number(resetDigits.join('')));
     }
+    S.pool = getPool();
     S.lamps = 0;
     S.leverReady = false;
     S.phase = S.canGamble ? 'gamble' : 'idle';   // 有待收奖金则保留

@@ -4103,7 +4103,8 @@ function applyServerState(s, opts){
   if (!s) return;
   const deferWin = !!(opts && opts.deferWin);
   state.credits = s.credits;
-  state.jackpot = s.jackpot;
+  // 彩池是全局共享的（所有人转动注入都进同一个池，谁拉都从全局扣）
+  state.jackpot = s.pool != null ? s.pool : s.jackpot;
   state.bets = cloneBets(s.bets);
   state.lastBets = s.lastBets ? cloneBets(s.lastBets) : null;
   if (!deferWin){
@@ -4315,7 +4316,8 @@ function bindAccount(){
   el.accountBtn.addEventListener('click', e => {
     e.stopPropagation();
     el.acctPanel.hidden = !el.acctPanel.hidden;
-    if (!el.acctPanel.hidden) renderAccount();
+    // 每次打开都重新拉榜单（其他玩家可能已经刷新了纪录）
+    if (!el.acctPanel.hidden) refreshRank();
   });
   el.acctSwitch.addEventListener('click', logout);
   document.addEventListener('click', e => {
