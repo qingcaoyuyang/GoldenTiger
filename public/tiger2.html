@@ -593,10 +593,25 @@ body.win-active .center-stage{opacity:0}
   min-height:0;
 }
 .bet-group__label b{font-size:clamp(15px,1.8vw,25px);font-weight:900;line-height:1;text-shadow:0 1px 0 rgba(0,0,0,.35),0 0 10px rgba(255,255,255,.2)}
-/* 右侧幸运格抽奖中：押分区整体辉光 + 金边 */
+/* 右侧幸运格抽奖中：押分区整体辉光 + 金边（呼吸） */
 .bet-groups.is-chasing{
-  box-shadow:0 0 0 1px rgba(255,206,110,.5),0 0 30px rgba(255,180,70,.30),inset 0 0 26px rgba(255,170,60,.14);
+  box-shadow:0 0 0 1px rgba(255,206,110,.55),0 0 34px rgba(255,180,70,.34),inset 0 0 28px rgba(255,170,60,.16);
   border-radius:12px;
+  animation:deckGlow 1.15s ease-in-out infinite;
+}
+@keyframes deckGlow{
+  0%,100%{box-shadow:0 0 0 1px rgba(255,206,110,.45),0 0 26px rgba(255,180,70,.26),inset 0 0 22px rgba(255,170,60,.12)}
+  50%{box-shadow:0 0 0 1px rgba(255,226,150,.85),0 0 46px rgba(255,190,80,.52),inset 0 0 34px rgba(255,180,70,.26)}
+}
+/* 中奖定格：押分区金光大爆发 */
+.bet-groups.is-winning{
+  box-shadow:0 0 0 2px rgba(255,236,170,.95),0 0 60px rgba(255,196,86,.62),inset 0 0 44px rgba(255,186,76,.34);
+  border-radius:12px;
+  animation:deckWin .8s ease-in-out infinite;
+}
+@keyframes deckWin{
+  0%,100%{box-shadow:0 0 0 2px rgba(255,236,170,.8),0 0 44px rgba(255,196,86,.48),inset 0 0 34px rgba(255,186,76,.26)}
+  50%{box-shadow:0 0 0 3px rgba(255,248,214,1),0 0 78px rgba(255,206,100,.8),inset 0 0 58px rgba(255,196,90,.46)}
 }
 .bet-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:clamp(4px,.6vw,8px);min-height:0}
 /* Bet card feedback is compositor-only: every state change moves nothing but
@@ -619,14 +634,14 @@ body.win-active .center-stage{opacity:0}
 .bet-card::before{
   content:"";position:absolute;inset:-6%;pointer-events:none;z-index:0;border-radius:50%;
   background:radial-gradient(circle at 50% 46%,var(--c),transparent 66%);
-  opacity:calc(var(--lit) * .78);
+  opacity:calc(var(--lit) * .95);
   will-change:opacity;
 }
 /* 卡片本体提亮层：滚动时整张卡跟着发亮，不只是外围光晕 */
 .bet-card::after{
   content:"";position:absolute;inset:0;pointer-events:none;z-index:1;border-radius:inherit;
-  background:linear-gradient(180deg,rgba(255,244,214,.22),rgba(255,206,120,.08) 62%,transparent);
-  opacity:calc(var(--lit) * .5);
+  background:linear-gradient(180deg,rgba(255,246,222,.4),rgba(255,206,120,.16) 62%,transparent);
+  opacity:calc(var(--lit) * .85);
   will-change:opacity;
 }
 .bet-card__ring{
@@ -643,6 +658,17 @@ body.win-active .center-stage{opacity:0}
 .bet-card:active:not(:disabled){transform:scale(.965)}
 .bet-card.has-bet{--lit:.55;--ring:.48}
 .bet-card.is-lit{--lit:1;--ring:1}
+/* 中奖定格：卡片炽热发光（外发光强度随 --lit 提升，远强于普通押注） */
+.bet-card.is-lit{
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.08),
+    inset 0 -5px 10px rgba(0,0,0,.28),
+    0 2px 6px rgba(0,0,0,.24),
+    0 0 calc(10px + var(--lit) * 26px) color-mix(in srgb, var(--c) 78%, transparent),
+    0 0 calc(4px + var(--lit) * 10px) rgba(255,255,255,.5);
+}
+/* 中奖卡片的金色闪频，强化"幸运时刻" */
+.bet-card.is-lit .bet-card__flash{animation:cardFlash .45s ease-in-out infinite alternate both}
 .bet-card.is-win{--ring:1}
 .bet-card.is-win .bet-card__flash{animation:cardFlash .4s ease-in-out 4 alternate both}
 @keyframes cardFlash{from{opacity:.12}to{opacity:.85}}
@@ -658,7 +684,7 @@ body.win-active .center-stage{opacity:0}
 .medal::before{content:"";position:absolute;inset:4%;border-radius:50%;border:1px solid rgba(255,231,166,.15);background:radial-gradient(circle at 34% 22%,rgba(255,255,255,.22),transparent 32%);pointer-events:none;z-index:3}
 .medal svg{position:relative;z-index:2;width:92%;height:92%;filter:drop-shadow(0 2px 2px rgba(0,0,0,.5))}
 .bet-card:hover:not(:disabled) .medal{transform:translateY(-1px) scale(1.04)}
-.bet-card__backlight{position:absolute;inset:-30%;z-index:0;border-radius:50%;background:radial-gradient(circle,var(--c),transparent 70%);opacity:calc(var(--lit)*.5);pointer-events:none;will-change:opacity}
+.bet-card__backlight{position:absolute;inset:-30%;z-index:0;border-radius:50%;background:radial-gradient(circle,var(--c),transparent 70%);opacity:calc(var(--lit)*.8);pointer-events:none;will-change:opacity}
 .bet-card__info{position:relative;z-index:2;display:flex;align-items:center;justify-content:center;gap:3px;line-height:1;width:100%;padding:0 2px;white-space:nowrap}
 .bet-card__info strong{font-size:clamp(9px,1vw,13px);font-weight:700;color:#d9c39a;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .bet-card__info em{font-family:var(--font-num);font-style:normal;font-weight:800;font-size:clamp(9px,1vw,13px);color:var(--c);opacity:.85}
@@ -3380,17 +3406,19 @@ function spinCardChase(targetIndex, opts = {}){
   });
 }
 
-/* 押分区「抽奖中」氛围标记 */
-function markChasing(on){
+/* 押分区氛围标记：抽奖中 / 中奖定格 */
+function markChasing(on, extra){
   const g = document.querySelector('.bet-groups');
-  if (g) g.classList.toggle('is-chasing', !!on);
+  if (!g) return;
+  g.classList.toggle('is-chasing', !!on);
+  g.classList.toggle('is-winning', extra === 'win');
 }
 
 function paintCardResting(){
-  markChasing(false);
+  markChasing(false, cardChase.held.length ? 'win' : '');
   for (let i = 0; i < CARD_COUNT; i++){
     const held = cardChase.held.includes(i);
-    const v = held ? .9 : 0;
+    const v = held ? 3.2 : 0;          // 中奖定格：远高于饱和点，所有光效拉满
     cardChase.energy[i] = v;
     cardChase.lastV[i] = v;
     const card = cardEls[PRIZES[i].id];
@@ -3441,7 +3469,7 @@ function updateCardChase(now, dt){
       if (d > 1) target += .34 * Math.exp(-(d - 1) / 2.6);
       if (d === 0) target = Math.max(target, 2.5);
     } else if (cardChase.held.includes(i)){
-      target = 1.5 + .22 * pulse;
+      target = 3.2 + .85 * pulse;        // 中奖定格：强背光 + 大幅呼吸
     }
     const k = 1 - Math.exp(-(target > cardChase.energy[i] ? attack : release) * dt);
     cardChase.energy[i] += (target - cardChase.energy[i]) * k;
