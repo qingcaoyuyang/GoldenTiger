@@ -593,6 +593,11 @@ body.win-active .center-stage{opacity:0}
   min-height:0;
 }
 .bet-group__label b{font-size:clamp(15px,1.8vw,25px);font-weight:900;line-height:1;text-shadow:0 1px 0 rgba(0,0,0,.35),0 0 10px rgba(255,255,255,.2)}
+/* 右侧幸运格抽奖中：押分区整体辉光 + 金边 */
+.bet-groups.is-chasing{
+  box-shadow:0 0 0 1px rgba(255,206,110,.5),0 0 30px rgba(255,180,70,.30),inset 0 0 26px rgba(255,170,60,.14);
+  border-radius:12px;
+}
 .bet-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:clamp(4px,.6vw,8px);min-height:0}
 /* Bet card feedback is compositor-only: every state change moves nothing but
    opacity on pre-promoted layers (glow + ring). No filter, no background
@@ -614,6 +619,13 @@ body.win-active .center-stage{opacity:0}
 .bet-card::before{
   content:"";position:absolute;inset:-6%;pointer-events:none;z-index:0;border-radius:50%;
   background:radial-gradient(circle at 50% 46%,var(--c),transparent 66%);
+  opacity:calc(var(--lit) * .78);
+  will-change:opacity;
+}
+/* 卡片本体提亮层：滚动时整张卡跟着发亮，不只是外围光晕 */
+.bet-card::after{
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:1;border-radius:inherit;
+  background:linear-gradient(180deg,rgba(255,244,214,.22),rgba(255,206,120,.08) 62%,transparent);
   opacity:calc(var(--lit) * .5);
   will-change:opacity;
 }
@@ -646,7 +658,7 @@ body.win-active .center-stage{opacity:0}
 .medal::before{content:"";position:absolute;inset:4%;border-radius:50%;border:1px solid rgba(255,231,166,.15);background:radial-gradient(circle at 34% 22%,rgba(255,255,255,.22),transparent 32%);pointer-events:none;z-index:3}
 .medal svg{position:relative;z-index:2;width:92%;height:92%;filter:drop-shadow(0 2px 2px rgba(0,0,0,.5))}
 .bet-card:hover:not(:disabled) .medal{transform:translateY(-1px) scale(1.04)}
-.bet-card__backlight{position:absolute;inset:-30%;z-index:0;border-radius:50%;background:radial-gradient(circle,var(--c),transparent 70%);opacity:calc(var(--lit)*.28);pointer-events:none;will-change:opacity}
+.bet-card__backlight{position:absolute;inset:-30%;z-index:0;border-radius:50%;background:radial-gradient(circle,var(--c),transparent 70%);opacity:calc(var(--lit)*.5);pointer-events:none;will-change:opacity}
 .bet-card__info{position:relative;z-index:2;display:flex;align-items:center;justify-content:center;gap:3px;line-height:1;width:100%;padding:0 2px;white-space:nowrap}
 .bet-card__info strong{font-size:clamp(9px,1vw,13px);font-weight:700;color:#d9c39a;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .bet-card__info em{font-family:var(--font-num);font-style:normal;font-weight:800;font-size:clamp(9px,1vw,13px);color:var(--c);opacity:.85}
@@ -3351,6 +3363,7 @@ function spinCardChase(targetIndex, opts = {}){
     cardChase.active = true;
     cardChase.held = [];
     cardChase.landAt = 0;
+    markChasing(true);
     cardChase.spin = {
       from, dist, targetAbs: from + dist, targetIndex,
       start: performance.now(), duration,
@@ -3360,7 +3373,14 @@ function spinCardChase(targetIndex, opts = {}){
   });
 }
 
+/* 押分区「抽奖中」氛围标记 */
+function markChasing(on){
+  const g = document.querySelector('.bet-groups');
+  if (g) g.classList.toggle('is-chasing', !!on);
+}
+
 function paintCardResting(){
+  markChasing(false);
   for (let i = 0; i < CARD_COUNT; i++){
     const held = cardChase.held.includes(i);
     const v = held ? .9 : 0;
@@ -3400,24 +3420,25 @@ function updateCardChase(now, dt){
   }
   const head = ((cardChase.pos % CARD_COUNT) + CARD_COUNT) % CARD_COUNT;
   const pulse = .5 + .5 * Math.sin(now * .006 + .4);
-  const attack = spinning ? 34 : 9;
-  const release = spinning ? 8 : 7;
+  const attack = spinning ? 62 : 9;     // 起亮更快，滚动光带更醒目
+  const release = spinning ? 3.4 : 7;   // 释放更慢：卡片离开光带后能沉到新的底光（.42）
   const strip = cardChase.spin?.strip || 5;
 
   for (let i = 0; i < CARD_COUNT; i++){
     const d = (head - i + CARD_COUNT) % CARD_COUNT;
     let target = .01;
     if (spinning){
-      if (d < strip) target = 1.32 - (d / strip) * .38;
-      else target = .035;
-      if (d > 1) target += .22 * Math.exp(-(d - 1) / 2.2);
-      if (d === 0) target = Math.max(target, 1.26);
+      // 滚动光带：峰值大幅提高，暗部也留一点底光（整排不至于死黑）
+      if (d < strip) target = 2.6 - (d / strip) * .78;
+      else target = .42;          // 暗部也留底光：整排卡片都有存在感
+      if (d > 1) target += .34 * Math.exp(-(d - 1) / 2.6);
+      if (d === 0) target = Math.max(target, 2.5);
     } else if (cardChase.held.includes(i)){
-      target = .92 + .16 * pulse;
+      target = 1.5 + .22 * pulse;
     }
     const k = 1 - Math.exp(-(target > cardChase.energy[i] ? attack : release) * dt);
     cardChase.energy[i] += (target - cardChase.energy[i]) * k;
-    const v = clamp(cardChase.energy[i], 0, 1.42);
+    const v = clamp(cardChase.energy[i], 0, 2.8);
     if (v > cardChase.lastV[i] + .006 || v < cardChase.lastV[i] - .006){
       cardChase.lastV[i] = v;
       cardChase.energy[i] = v;
@@ -3430,6 +3451,7 @@ function updateCardChase(now, dt){
 }
 
 function clearCardChase(){
+  markChasing(false);
   cardChase.active = false;
   cardChase.spin = null;
   cardChase.held = [];
@@ -4629,25 +4651,37 @@ async function gamble(choice){
 
 /* 收分：入账与数字滚动在点击的同一帧开始，金币只是陪衬，不再等 460ms。
    原来「等金币飞一半再入账」是迟滞感的主要来源。 */
+/* 收分：乐观入账——点击立刻到账、立刻解锁下一轮，不等网络往返。
+   服务端确认在后台进行（队列里排在后续操作之前，保证账目顺序正确）；
+   万一被拒绝，applyServerState 会把数字校正回服务端值。 */
 async function collectWinnings(){
   if (!state.canGamble || state.busy || state.bonusWin <= 0) return;
-  const r = await gameAct('collect', {});
-  if (!r.ok){
-    if (r.data.error) showCenterMsg(r.data.error, 1400);
-    sound.error();
-    return;
-  }
-  state.busy = true;
-  state.phase = 'collect';
-  applyServerState(r.data.state);
+  const amount = state.bonusWin;
+
+  // —— 立即反馈：钱到账 + 立刻可开下一把 ——
+  state.bonusWin = 0;
+  state.canGamble = false;
+  state.doubleUsed = false;
+  state.credits += amount;
+  state.busy = false;
+  state.phase = 'idle';
+  renderBonus();
+  renderScore(true, amount);
   bumpLed(el.creditLed);
-  updateControls();
   hideWinOverlay();
   sound.collect();
   fx.flyCoins(el.bonusLed, el.creditLed, 10);
-  // 380ms 就恢复到可操作：金币继续飞，但不再挡着下一把
-  await wait(380);
-  endRound(true);
+  endRound(true);            // 立刻清场并恢复可操作（主按钮变「启动」）
+  updateControls();
+
+  // —— 后台确认（不阻塞玩家）——
+  const r = await gameAct('collect', {});
+  if (!r.ok){
+    applyServerState(r.data.state);
+    if (r.data.error) showCenterMsg(r.data.error, 1400);
+  } else {
+    state.v = r.data.state.v;
+  }
 }
 
 async function doubleUp(){

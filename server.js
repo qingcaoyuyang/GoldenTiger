@@ -456,6 +456,15 @@ function saveGameState(userId, state){
 }
 
 /* ============================================================
+   测试通道开关
+   ------------------------------------------------------------
+   测试期：强制落点（L/R/J、三击幸运虎）对所有账号开放，默认开启。
+   后期要改回「账号白名单制」：把环境变量设为 off 即可
+     GT_DEV_TOOLS=off node --experimental-sqlite server.js
+   ============================================================ */
+const DEV_TOOLS_OPEN = (process.env.GT_DEV_TOOLS || 'on') !== 'off';
+
+/* ============================================================
    Action 执行器：state -> { ok, state, result?, error? }
    ============================================================ */
 function gameAction(st, action, payload = {}, ctx = {}){
@@ -559,11 +568,11 @@ function gameAction(st, action, payload = {}, ctx = {}){
     S.canGamble = false;
     S.rounds += 1;
 
-    // 强制落点：仅「测试账号」（dev_tools=1）有效；普通账号即使伪造请求也会被忽略，
-    // 落点仍然由服务端随机决定——保证防刷不被绕过。
+    // 强制落点（测试通道）：测试期对所有账号开放。
+    // 后期要收回白名单制时，把环境变量 GT_DEV_TOOLS=off 即可（无需改代码）。
     let target = randInt(0, PATH_LEN - 1);
     const force = String((payload && payload.force) || '').toUpperCase();
-    if (force && ctx.devTools){
+    if (force && DEV_TOOLS_OPEN){
       const forced = { L: 15, R: 3, J: 9 }[force];
       if (forced != null){
         target = forced;
