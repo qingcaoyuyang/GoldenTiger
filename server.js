@@ -73,6 +73,11 @@ db.exec(`
     db.exec("ALTER TABLE users ADD COLUMN game_state TEXT");
     console.log('[GoldenTiger] 已为 users 表添加 game_state 列（旧账号首次登录时自动迁移）');
   }
+  // dev_tools：该账号是否拥有测试通道（强制落点 L/R/J、三击幸运虎）
+  if (!db.prepare("PRAGMA table_info(users)").all().some(c => c.name === 'dev_tools')){
+    db.exec("ALTER TABLE users ADD COLUMN dev_tools INTEGER NOT NULL DEFAULT 0");
+    console.log('[GoldenTiger] 已为 users 表添加 dev_tools 列（测试通道白名单）');
+  }
 }
 
 // 启动时清理过期 session
@@ -141,6 +146,7 @@ function publicUser(row) {
     best: row.best,
     rounds: row.rounds,
     createdAt: row.created_at,
+    devTools: !!row.dev_tools,         // 是否拥有测试通道（强制落点）
     state: loadGameState(row)          // 完整游戏状态（灯/押注/奖金/彩池/门禁）
   };
 }
@@ -452,7 +458,7 @@ function saveGameState(userId, state){
 /* ============================================================
    Action 执行器：state -> { ok, state, result?, error? }
    ============================================================ */
-function gameAction(st, action, payload = {}){
+function gameAction(st, action, payload = {}, ctx = {}){
   const S = st;
   const bump = () => { S.v = (S.v || 1) + 1; };
 
@@ -523,6 +529,7 @@ function gameAction(st, action, payload = {}){
 
   // ---------- 旋转（服务端开奖） ----------
   if (action === 'spin'){
+    let result_forced = null;
     if (S.phase !== 'idle') return { ok:false, error:'当前回合未结束' };
     if (S.leverReady) return { ok:false, error:'请先拉动拉杆领取超级奖励' };
     // 无押注时：复制上一轮的押注（延续上一次的压分模式）并扣除相应积分。
@@ -552,7 +559,17 @@ function gameAction(st, action, payload = {}){
     S.canGamble = false;
     S.rounds += 1;
 
-    const target = randInt(0, PATH_LEN - 1);
+    // 强制落点：仅「测试账号」（dev_tools=1）有效；普通账号即使伪造请求也会被忽略，
+    // 落点仍然由服务端随机决定——保证防刷不被绕过。
+    let target = randInt(0, PATH_LEN - 1);
+    const force = String((payload && payload.force) || '').toUpperCase();
+    if (force && ctx.devTools){
+      const forced = { L: 15, R: 3, J: 9 }[force];
+      if (forced != null){
+        target = forced;
+        result_forced = force;
+      }
+    }
     const cfg = SLOT_LAYOUT[target];
     let result;
 
@@ -623,7 +640,7 @@ function gameAction(st, action, payload = {}){
     }
     S.phase = S.leverReady ? 'lever' : (S.canGamble ? 'gamble' : 'idle');
     bump();
-    return { ok:true, state:S, result:{ ...result, playedBets, poolAdd, lampsAfter:S.lamps, leverReadyAfter:S.leverReady } };
+    return { ok:true, state:S, result:{ ...result, playedBets, poolAdd, lampsAfter:S.lamps, leverReadyAfter:S.leverReady, forced: result_forced } };
   }
 
   // ---------- 收分 ----------
@@ -801,7 +818,7 @@ async function handleApi(req, res, pathname) {
     if (!additive && (!Number.isFinite(clientV) || clientV !== st.v)){
       return sendJson(res, 409, { error: '状态已更新，请同步', state: st });
     }
-    const r = gameAction(st, action, body.payload || {});
+    const r = gameAction(st, action, body.payload || {}, { devTools: !!user.dev_tools });
     if (!r.ok){
       // 失败也持久化（部分 action 失败前无副作用，这里统一不写库）
       return sendJson(res, 400, { error: r.error, state: st });

@@ -1829,6 +1829,7 @@ const state = {
   lastBets: null,
   busy: false,
   canGamble: false,
+  forced: null,              // 下一把强制落点（仅测试账号生效：L 左幸运 / R 右幸运 / J 大七七）
   muted: false,
   phase: 'idle',
   round: 0,
@@ -3726,6 +3727,47 @@ function denyForLever(){
   setTimeout(() => el.spin.classList.remove('deny'), 460);
 }
 
+/* ============================================================
+   测试通道：强制下一把落点（仅测试账号在服务端生效）
+   - 电脑：键盘 L（左幸运虎）/ R（右幸运虎）/ J（大七七）
+   - 手机：三击左侧或右侧幸运格
+   普通账号即使伪造请求，服务端也会忽略 force，落点仍由服务端随机。
+   ============================================================ */
+const FORCE_IDX = { L: 15, R: 3, J: 9 };
+const FORCE_LABEL = { L: '左幸运虎', R: '右幸运虎', J: '大七七' };
+
+function setForce(kind){
+  state.forced = kind;
+  const idx = FORCE_IDX[kind];
+  const cell = cellEls[idx];
+  if (cell){
+    cell.classList.remove('is-armed');
+    void cell.offsetWidth;
+    cell.classList.add('is-armed');
+    setTimeout(() => cell.classList.remove('is-armed'), 1800);
+  }
+  floatLed(el.bonusLed, '下一把 → ' + FORCE_LABEL[kind]);
+  sound.click();
+}
+
+/* 三击幸运格：手机端的强制落点通道 */
+function bindLuckyCheat(){
+  SLOT_LAYOUT.forEach((cfg, i) => {
+    if (!cfg.lucky) return;
+    const cell = cellEls[i];
+    if (!cell) return;
+    let times = [];
+    cell.addEventListener('pointerup', () => {
+      const now = Date.now();
+      times = times.filter(t => now - t < 900);
+      times.push(now);
+      if (times.length < 3) return;
+      times = [];
+      setForce(cfg.lucky);
+    });
+  });
+}
+
 /* 拉杆：点一下或往下拖都能触发 */
 function bindLever(){
   let drag = null;
@@ -4328,7 +4370,10 @@ async function startSpin(){
   flushBets();
 
   // 提交旋转：服务端完成扣注、彩池注入、随机落点、结算、点灯
-  const r = await gameAct('spin', {});
+  // force 仅测试账号在服务端生效（普通账号会被忽略，落点仍随机）
+  const force = state.forced;
+  state.forced = null;
+  const r = await gameAct('spin', force ? { force } : {});
   if (!r.ok){
     if (r.data.error) showCenterMsg(r.data.error, 1500);
     sound.error();
@@ -4719,6 +4764,9 @@ function onKeyDown(e){
   noteActivity();
   const key = e.key.toLowerCase();
   if (key === 's'){ onPrimary(); return; }
+  if (key === 'l'){ setForce('L'); return; }
+  if (key === 'r'){ setForce('R'); return; }
+  if (key === 'j'){ setForce('J'); return; }
   if (key === 'c'){ collectWinnings(); return; }
   if (key === 'e'){ doubleUp(); return; }
   if (key === 'b'){ gamble('big'); return; }
@@ -4741,6 +4789,7 @@ function init(){
   bindLever();
   bindAccount();
   bindQuickBet();
+  bindLuckyCheat();
   state.bets = zeroBets();
 
   let storedMuted = false;
