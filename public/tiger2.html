@@ -3707,15 +3707,19 @@ async function pullLever(){
     console.error('[lever] 演出异常，已兜底恢复', err);
     applyServerState(r.data.state);
   } finally {
+    // 收尾：只清演出痕迹、恢复可操作，**不调 endRound**——
+    // endRound 会把待收奖金清零、canGamble 置 false，还可能用旧的 leverReady
+    // 推出错误的 phase，导致拉完杆之后按钮全锁（画面卡死）。
     el.leverResult.classList.remove('on');
     el.poolReset.classList.remove('on', 'done');
     state.leverBusy = false;
     state.busy = false;
-    state.phase = state.leverReady ? 'lever' : (state.canGamble ? 'gamble' : 'idle');
+    clearWinClasses();
+    clearCardChase();
+    clearRingHeld();
+    buildIdleReel();                       // 中间滚轮回到待机画面
     renderLamps();
-    updateControls();
-    buildIdleReel();
-    endRound(false);
+    updateControls();                      // 恢复「启动 / 收分」等按钮
   }
 }
 
@@ -3988,16 +3992,19 @@ function applyServerState(s, opts){
   const deferWin = !!(opts && opts.deferWin);
   state.credits = s.credits;
   state.jackpot = s.jackpot;
-  state.lamps = s.lamps;
-  state.leverReady = s.leverReady;
   state.bets = cloneBets(s.bets);
   state.lastBets = s.lastBets ? cloneBets(s.lastBets) : null;
   if (!deferWin){
+    // 全量落地：灯数、拉杆态、奖励分、可收分态
+    state.lamps = s.lamps;
+    state.leverReady = s.leverReady;
     state.bonusWin = s.bonusWin;
     state.canGamble = s.canGamble;
     state.doubleUsed = s.doubleUsed;
     // phase 以服务端逻辑态为准（idle/gamble/lever）；演出态只在演出内存活
     state.phase = s.phase || 'idle';
+    // deferWin = true（演出进行中）：灯 / 拉杆态 / 奖励分一律不落地——
+    // 星星必须「先滚到、再点亮」，拉杆要等这一局结算完才出现。
   }
   state.best = s.best;
   state.rounds = s.rounds;
@@ -4007,6 +4014,8 @@ function applyServerState(s, opts){
   renderLamps();
   renderAccount();
   renderNewbie();
+    // deferWin = true（演出进行中）：灯 / 拉杆态 / 奖励分一律不落地——
+    // 星星必须「先滚到、再点亮」，拉杆要等这一局结算完才出现。
 }
 
 /* 新手保护提示：还剩几次保底幸运虎 */
@@ -4494,15 +4503,21 @@ async function playResolve(res, roundId, serverState){
   return playNormal(res, roundId, serverState);
 }
 
-/* 灯亮动画：lampsAfter 来自服务端结果（演出时本地灯数尚未落地） */
-function animateLampLit(lampsAfter){
-  const idx = Math.min(lampsAfter == null ? state.lamps : lampsAfter, LAMP_GOAL) - 1;
-  const kid = el.centerLamps.children[idx];
+/* 点亮第 N 颗星：只在「灯已经滚到落点、结算开始」时调用。
+   服务端在 spin 时就把灯数算好了，但这里刻意延后到演出到达落点才显示——
+   星星要「先到达、再增加」，不能一启动就亮。 */
+function revealLamp(lampsAfter){
+  if (lampsAfter == null) return;
+  const idx = Math.min(lampsAfter, LAMP_GOAL);
+  if (idx <= (state.lamps || 0)) return;      // 已经点亮了
+  state.lamps = idx;
+  renderLamps();
+  const kid = el.centerLamps.children[idx - 1];
   if (kid){
     kid.classList.add('just-lit');
     setTimeout(() => kid.classList.remove('just-lit'), 520);
   }
-  if (lampsAfter != null && lampsAfter >= LAMP_GOAL) sound.lampsFull();
+  if (idx >= LAMP_GOAL) sound.lampsFull();
 }
 
 /* ---------- 普通格结算演出 ---------- */
@@ -4533,7 +4548,7 @@ async function playNormal(res, roundId, serverState){
   bumpLed(el.bonusLed);
   floatLed(el.bonusLed, '+' + fmt(res.win));
 
-  if (res.lampLit) animateLampLit(res.lampsAfter);
+  if (res.lampLit) revealLamp(res.lampsAfter);
 
   if (res.isJackpot){
     el.centerJackpot.classList.remove('is-hit');
@@ -4565,7 +4580,7 @@ async function playGrid(res, roundId, serverState){
   if (res.guaranteed) showCenterMsg('新手保护 · 幸运虎降临', 1600);
   state.phase = 'bonus';
   cellEls[res.target].classList.add('is-selected');
-  animateLampLit(res.lampsAfter);
+  revealLamp(res.lampsAfter);
   sound.bonus();
   await wait(420);
   if (roundId !== resolveLock) return;
@@ -4609,7 +4624,7 @@ async function playCard(res, roundId, serverState){
   if (res.guaranteed) showCenterMsg('新手保护 · 幸运虎降临', 1600);
   state.phase = 'bonus';
   cellEls[res.target].classList.add('is-selected');
-  animateLampLit(res.lampsAfter);
+  revealLamp(res.lampsAfter);
   sound.bonus();
   await wait(340);
   if (roundId !== resolveLock) return;
