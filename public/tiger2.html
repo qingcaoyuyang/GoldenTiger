@@ -470,6 +470,49 @@ body.win-active .center-jackpot{opacity:0}
   filter:drop-shadow(0 5px 9px rgba(0,0,0,.55));
 }
 body.win-active .center-stage{opacity:0}
+/* Jackpot 框周燃烧：两层反向旋转的火焰环 + 上升火苗 */
+/* 燃烧时的框外辉光（自身 box-shadow 不受 overflow 裁剪，可溢出到框外） */
+.center-stage.is-burning{
+  box-shadow:
+    inset 0 0 0 1px rgba(255,222,150,.5),
+    inset 0 0 0 4px rgba(62,34,6,.92),
+    inset 0 0 28px rgba(0,0,0,.88),
+    0 4px 14px rgba(0,0,0,.6),
+    0 0 0 1px rgba(255,214,128,.16),
+    0 0 34px rgba(255,120,20,.45),
+    0 0 70px rgba(255,80,10,.28);
+}
+/* 火焰层放在图案之下（z-index:1）——环绕框边燃烧，不遮挡中间的结果图案 */
+.center-stage.is-burning::before{
+  content:"";position:absolute;inset:-4px;border-radius:22%/28%;pointer-events:none;z-index:1;
+  background:conic-gradient(from 0deg,#ff6a12,#ffd24a,#ff3b00,#ffae1f,#ff6a12);
+  filter:blur(7px);opacity:.95;
+  animation:burnSpin .55s linear infinite;
+  -webkit-mask:radial-gradient(closest-side,transparent 80%,#000 90%);
+  mask:radial-gradient(closest-side,transparent 80%,#000 90%);
+}
+.center-stage.is-burning::after{
+  content:"";position:absolute;inset:-1px;border-radius:22%/28%;pointer-events:none;z-index:1;
+  background:conic-gradient(from 180deg,#ff4500,#ffc93a,#ff7a00,#ffc93a,#ff4500);
+  filter:blur(3px);opacity:.95;
+  animation:burnSpin .34s linear infinite reverse;
+  -webkit-mask:radial-gradient(closest-side,transparent 86%,#000 94%);
+  mask:radial-gradient(closest-side,transparent 86%,#000 94%);
+}
+@keyframes burnSpin{to{transform:rotate(360deg)}}
+.burn-flames{position:absolute;inset:0;z-index:1;pointer-events:none;overflow:visible}
+.burn-flames i{
+  position:absolute;left:50%;top:50%;width:13px;height:21px;margin:-10px 0 0 -6px;
+  background:radial-gradient(ellipse at 50% 72%,#fff4c4,#ff9a12 44%,rgba(255,70,0,0) 74%);
+  filter:blur(.6px);
+  transform-origin:0 0;
+  animation:flameRise .58s var(--d) linear infinite;
+}
+@keyframes flameRise{
+  0%{transform:rotate(var(--a)) translateY(-50%) scale(.3);opacity:0}
+  22%{opacity:.9}
+  100%{transform:rotate(var(--a)) translateY(calc(-50% - 20px)) scale(var(--sc,1));opacity:0}
+}
 .reel__strip{position:absolute;left:0;top:0;width:100%;will-change:transform}
 .reel-item{height:var(--item-h,100%);display:grid;place-items:center}
 .reel-item svg{width:84%;height:84%;filter:drop-shadow(0 2px 3px rgba(0,0,0,.6))}
@@ -637,13 +680,16 @@ body.win-active .center-stage{opacity:0}
   opacity:calc(var(--lit) * .95);
   will-change:opacity;
 }
-/* 卡片本体提亮层：滚动时整张卡跟着发亮，不只是外围光晕 */
+/* 卡片本体提亮层：只做"暖光氛围"，不盖白图案（否则图案会被洗糊） */
 .bet-card::after{
   content:"";position:absolute;inset:0;pointer-events:none;z-index:1;border-radius:inherit;
-  background:linear-gradient(180deg,rgba(255,246,222,.4),rgba(255,206,120,.16) 62%,transparent);
-  opacity:calc(var(--lit) * .85);
+  background:linear-gradient(180deg,rgba(255,232,176,.20),rgba(255,186,84,.08) 62%,transparent);
+  opacity:calc(var(--lit) * .4);
   will-change:opacity;
 }
+/* 亮起时图案本身更艳更实，而不是发白 */
+.bet-card.is-lit .bet-card__art{filter:saturate(1.3) contrast(1.08) brightness(1.05)}
+.bet-card.is-lit .medal{filter:drop-shadow(0 0 10px rgba(255,190,80,.55))}
 .bet-card__ring{
   position:absolute;inset:0;z-index:5;border-radius:inherit;pointer-events:none;
   border:1.5px solid var(--c);
@@ -658,6 +704,15 @@ body.win-active .center-stage{opacity:0}
 .bet-card:active:not(:disabled){transform:scale(.965)}
 .bet-card.has-bet{--lit:.55;--ring:.48}
 .bet-card.is-lit{--lit:1;--ring:1}
+/* 亮起时卡片底色整体提亮：光从卡片内部透出来，图案依然清晰饱和 */
+.bet-card.is-lit{
+  background:
+    radial-gradient(circle at 50% 24%, color-mix(in srgb, var(--c) 46%, transparent), transparent 64%),
+    linear-gradient(165deg, rgba(146,88,34,.9), rgba(62,32,12,.92));
+}
+/* 外圈光晕扩散更大更实 */
+.bet-card.is-lit::before{inset:-11%}
+.bet-card.is-lit .bet-card__backlight{inset:-44%;opacity:calc(var(--lit) * .95)}
 /* 中奖定格：卡片炽热发光（外发光强度随 --lit 提升，远强于普通押注） */
 .bet-card.is-lit{
   box-shadow:
@@ -3445,7 +3500,7 @@ function updateCardChase(now, dt){
   if (cardChase.spin){
     const s = cardChase.spin;
     const raw = clamp((now - s.start) / s.duration, 0, 1);
-    cardChase.pos = s.from + s.dist * travelAt(raw, .14, .55);
+    cardChase.pos = s.from + s.dist * travelAt(raw, .16, .64);   // 末段减速更明显
     const headIdx = Math.floor(cardChase.pos) % CARD_COUNT;
     sound.tick(s.dist / (s.duration / 1000));
     if (raw >= 1){
@@ -3475,10 +3530,10 @@ function updateCardChase(now, dt){
     const d = (head - i + CARD_COUNT) % CARD_COUNT;
     let target = .01;
     if (spinning){
-      // 滚动光带：峰值大幅提高，暗部也留一点底光（整排不至于死黑）
-      if (d < strip) target = 2.6 - (d / strip) * .78;
-      else target = .42;          // 暗部也留底光：整排卡片都有存在感
-      if (d > 1) target += .34 * Math.exp(-(d - 1) / 2.6);
+      // 跑马灯：连续 5 盏几乎等亮地一起跑（视觉上是一整条光带在滚动）
+      if (d < strip) target = 2.45 - d * .07;
+      else target = .34;          // 暗部留一点底光：整排卡片都有存在感
+      if (d > 1) target += .3 * Math.exp(-(d - 1) / 2.6);
       if (d === 0) target = Math.max(target, 2.5);
     } else if (cardChase.held.includes(i)){
       target = 3.2 + .85 * pulse;        // 中奖定格：强背光 + 大幅呼吸
@@ -3672,7 +3727,7 @@ async function pullLever(){
   const h = el.centerStage.clientHeight || 1;
   await new Promise(resolve => {
     const t0 = performance.now();
-    const dur = 3200;
+    const dur = 6200;      // Jackpot 抽奖：加长 3 秒，末段缓慢停下
     (function frame(now){
       const p = Math.min(1, (now - t0) / dur);
       const e = 1 - Math.pow(1 - p, 4);
@@ -3688,7 +3743,10 @@ async function pullLever(){
     setText(el.leverResultAmount, res.amount > 0 ? '+' + fmt(res.amount) : '彩池已空');
     el.leverResult.classList.add('on');
     if (res.amount > 0){
-      // 公告牌：显示本次 JACKPOT 领取的奖金
+      // 先燃烧 1 秒，再弹 JACKPOT 公告牌
+      startBurn();
+      await wait(1000);
+      stopBurn();
       showWinOverlay('mega', 'JACKPOT', res.amount, '超级奖励 · 拉杆领取', 2200);
       sound.gambleWin();
       // 奖金飞向积分窗的动效
@@ -3740,6 +3798,30 @@ async function pullLever(){
     renderLamps();
     updateControls();                      // 恢复「启动 / 收分」等按钮
   }
+}
+
+/* Jackpot 框周燃烧：火焰只加"光"，不遮图案 */
+let burnBox = null;
+function startBurn(){
+  const stage = el.centerStage;
+  if (!stage) return;
+  stage.classList.add('is-burning');
+  if (burnBox) burnBox.remove();
+  const box = document.createElement('div');
+  box.className = 'burn-flames';
+  for (let i = 0; i < 12; i++){
+    const f = document.createElement('i');
+    f.style.setProperty('--a', (i / 12) * 360 + 'deg');
+    f.style.setProperty('--d', (Math.random() * .45).toFixed(2) + 's');
+    f.style.setProperty('--sc', (.7 + Math.random() * .7).toFixed(2));
+    box.appendChild(f);
+  }
+  stage.appendChild(box);
+  burnBox = box;
+}
+function stopBurn(){
+  if (el.centerStage) el.centerStage.classList.remove('is-burning');
+  if (burnBox){ burnBox.remove(); burnBox = null; }
 }
 
 /* Credit 数字滚动上涨（奖金入账的视觉） */
