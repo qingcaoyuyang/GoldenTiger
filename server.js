@@ -299,7 +299,7 @@ const userStmt = {
   byName: db.prepare('SELECT * FROM users WHERE username = ?'),
   byId: db.prepare('SELECT * FROM users WHERE id = ?'),
   insert: db.prepare(
-    'INSERT INTO users (username, password_hash, credits, jackpot, best, rounds, created_at, updated_at) VALUES (?, ?, 100, 8888, 100, 0, ?, ?)'
+    'INSERT INTO users (username, password_hash, credits, jackpot, best, rounds, game_state, created_at, updated_at) VALUES (?, ?, 100, 8888, 100, 0, ?, ?, ?)'
   ),
   update: db.prepare(
     'UPDATE users SET credits = ?, jackpot = ?, best = ?, rounds = ?, updated_at = ? WHERE id = ?'
@@ -353,6 +353,9 @@ const PATH_LEN = 24;
 const JACKPOT_BASE = 8888;
 const BET_MAX = 99;
 const LAMP_GOAL = 7;
+/* 新手保护：每 NEWBIE_EVERY 次启动保底一次幸运虎，累计 NEWBIE_LUCKY_TOTAL 次后恢复正常概率 */
+const NEWBIE_EVERY = 5;
+const NEWBIE_LUCKY_TOTAL = 6;
 const POOL_SYMBOLS = [
   { key:'tiger', label:'大虎头', share: 1 },
   { key:'bar3',  label:'大特奖', share: .5 },
@@ -415,7 +418,9 @@ function defaultGameState(){
     doubleUsed: false,
     best: 100,
     rounds: 0,
-    phase: 'idle'            // idle | gamble | lever
+    phase: 'idle',           // idle | gamble | lever
+    sinceLucky: 0,           // 距离下次保底幸运虎还差几次启动
+    luckyCount: 6            // 已获得的幸运虎次数（>=6 表示新手保护已用完）
   };
 }
 
@@ -441,18 +446,26 @@ function loadGameState(row){
     doubleUsed: !!st.doubleUsed,
     canGamble: !!st.canGamble,
     leverReady: !!st.leverReady,
+    sinceLucky: Math.max(0, Math.floor(Number(st.sinceLucky ?? 0))),
+    luckyCount: Math.max(0, Math.floor(Number(st.luckyCount ?? NEWBIE_LUCKY_TOTAL))),
     v: Math.max(1, Math.floor(Number(st.v ?? 1)))
   };
   // phase 由门禁字段推导，防止脏数据
   clean.phase = clean.leverReady ? 'lever' : (clean.canGamble ? 'gamble' : 'idle');
+  // 新手保护信息（派生，不入库）
+  clean.newbie = {
+    active: clean.luckyCount < NEWBIE_LUCKY_TOTAL,
+    remaining: Math.max(0, NEWBIE_LUCKY_TOTAL - clean.luckyCount)
+  };
   return clean;
 }
 
 function saveGameState(userId, state){
   const best = Math.max(state.best, state.credits);
   state.best = best;
+  const { newbie, ...persist } = state;      // newbie 是派生信息，不入库
   db.prepare('UPDATE users SET game_state = ?, credits = ?, jackpot = ?, best = ?, rounds = ?, updated_at = ? WHERE id = ?')
-    .run(JSON.stringify(state), state.credits, state.jackpot, best, state.rounds, new Date().toISOString(), userId);
+    .run(JSON.stringify(persist), state.credits, state.jackpot, best, state.rounds, new Date().toISOString(), userId);
 }
 
 /* ============================================================
@@ -570,7 +583,11 @@ function gameAction(st, action, payload = {}, ctx = {}){
 
     // 强制落点（测试通道）：测试期对所有账号开放。
     // 后期要收回白名单制时，把环境变量 GT_DEV_TOOLS=off 即可（无需改代码）。
+    // 启动计数（新手保护进度）
+    S.sinceLucky = (S.sinceLucky || 0) + 1;
+
     let target = randInt(0, PATH_LEN - 1);
+    let guaranteed = false;
     const force = String((payload && payload.force) || '').toUpperCase();
     if (force && DEV_TOOLS_OPEN){
       const forced = { L: 15, R: 3, J: 9 }[force];
@@ -578,8 +595,18 @@ function gameAction(st, action, payload = {}, ctx = {}){
         target = forced;
         result_forced = force;
       }
+    } else if (S.luckyCount < NEWBIE_LUCKY_TOTAL && S.sinceLucky >= NEWBIE_EVERY){
+      // 新手保护：每 5 次启动保底一次幸运虎（左/右随机），
+      // 累计拿满 6 次幸运虎后恢复正常概率。
+      target = randInt(0, 1) === 0 ? 15 : 3;
+      guaranteed = true;
     }
     const cfg = SLOT_LAYOUT[target];
+    // 命中幸运虎（自然或保底）→ 计数 +1、保底进度归零
+    if (cfg.lucky){
+      S.luckyCount = Math.min(NEWBIE_LUCKY_TOTAL, (S.luckyCount || 0) + 1);
+      S.sinceLucky = 0;
+    }
     let result;
 
     if (cfg.lucky === 'L'){
@@ -649,7 +676,7 @@ function gameAction(st, action, payload = {}, ctx = {}){
     }
     S.phase = S.leverReady ? 'lever' : (S.canGamble ? 'gamble' : 'idle');
     bump();
-    return { ok:true, state:S, result:{ ...result, playedBets, poolAdd, lampsAfter:S.lamps, leverReadyAfter:S.leverReady, forced: result_forced } };
+    return { ok:true, state:S, result:{ ...result, playedBets, poolAdd, lampsAfter:S.lamps, leverReadyAfter:S.leverReady, forced: result_forced, guaranteed } };
   }
 
   // ---------- 收分 ----------
@@ -759,7 +786,9 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 409, { error: '该用户名已被注册，请更换' });
     }
     try {
-      const info = userStmt.insert.run(username, hashPassword(body.password),
+      // 新账号写入新手保护状态：luckyCount=0 → 每 5 次启动保底一次幸运虎，累计 6 次
+      const fresh = { ...defaultGameState(), luckyCount: 0, sinceLucky: 0 };
+      const info = userStmt.insert.run(username, hashPassword(body.password), JSON.stringify(fresh),
         new Date().toISOString(), new Date().toISOString());
       const user = userStmt.byId.get(Number(info.lastInsertRowid));
       const s = createSession(user.id);

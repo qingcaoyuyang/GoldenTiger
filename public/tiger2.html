@@ -746,6 +746,12 @@ body.win-active .center-stage{opacity:0}
 .mini-btn--acct{max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* 账号：最高分 / 排行榜标题 / 禁用态 */
+/* 新手保护提示 */
+.newbie-note{
+  margin-top:5px;text-align:center;
+  font-size:10px;font-weight:800;letter-spacing:.08em;color:#ffd98a;
+  text-shadow:0 0 10px rgba(255,180,60,.45);
+}
 .rank-cap{margin:12px 0 0;font-size:10px;font-weight:700;letter-spacing:.14em;color:#8a7354;text-align:left}
 .acct-panel__best{display:flex;justify-content:space-between;align-items:baseline;padding:7px 0 3px;font-size:12px;color:#a98d66}
 .acct-panel__best b{font-family:var(--font-num);font-size:14px;color:#ffd45e;font-weight:900}
@@ -1842,6 +1848,7 @@ const state = {
   busy: false,
   canGamble: false,
   forced: null,              // 下一把强制落点（仅测试账号生效：L 左幸运 / R 右幸运 / J 大七七）
+  newbie: { active: false, remaining: 0 },   // 新手保护（每 5 次启动保底一次幸运虎，共 6 次）
   muted: false,
   phase: 'idle',
   round: 0,
@@ -3967,9 +3974,29 @@ function applyServerState(s, opts){
   state.best = s.best;
   state.rounds = s.rounds;
   state.v = s.v;
+  state.newbie = s.newbie || { active: false, remaining: 0 };
   renderAll(false);
   renderLamps();
   renderAccount();
+  renderNewbie();
+}
+
+/* 新手保护提示：还剩几次保底幸运虎 */
+function renderNewbie(){
+  const info = state.newbie || { active: false, remaining: 0 };
+  let node = document.getElementById('newbie-note');
+  if (!info.active){
+    if (node) node.remove();
+    return;
+  }
+  if (!node){
+    node = document.createElement('div');
+    node.id = 'newbie-note';
+    node.className = 'newbie-note';
+    const host = el.poolNote && el.poolNote.parentNode;
+    if (host) host.appendChild(node);
+  }
+  node.textContent = '新手保护 · 还剩 ' + info.remaining + ' 次幸运虎';
 }
 
 /* 统一操作入口：带乐观锁重试。409（版本过期/多端分支）时先同步最新状态，
@@ -4452,6 +4479,7 @@ function animateLampLit(lampsAfter){
 
 /* ---------- 普通格结算演出 ---------- */
 async function playNormal(res, roundId, serverState){
+  if (res.guaranteed) showCenterMsg('新手保护 · 幸运虎降临', 1600);
   state.phase = 'resolve';
   const cfg = cellData[res.target];
 
@@ -4506,6 +4534,7 @@ async function playNormal(res, roundId, serverState){
 
 /* ---------- 左侧幸运格：灯光横扫演出 ---------- */
 async function playGrid(res, roundId, serverState){
+  if (res.guaranteed) showCenterMsg('新手保护 · 幸运虎降临', 1600);
   state.phase = 'bonus';
   cellEls[res.target].classList.add('is-selected');
   animateLampLit(res.lampsAfter);
@@ -4549,6 +4578,7 @@ async function playGrid(res, roundId, serverState){
 
 /* ---------- 右侧幸运格：五灯连环演出 ---------- */
 async function playCard(res, roundId, serverState){
+  if (res.guaranteed) showCenterMsg('新手保护 · 幸运虎降临', 1600);
   state.phase = 'bonus';
   cellEls[res.target].classList.add('is-selected');
   animateLampLit(res.lampsAfter);
